@@ -17,16 +17,21 @@ IrisNp 是 Drake 中实际存在的算法，专门用于机器人配置空间。
 - 提供预定义配置模板：高安全、快速处理、平衡配置
 - 详细参数说明见 iris_np_config_documentation.py
 
+重构说明：
+- 已将功能模块提取到独立文件中：
+  - iris_np_seed_extractor.py: 种子点提取
+  - iris_np_processor.py: 种子点处理（串行/并行）
+  - iris_np_coverage_checker.py: 路径覆盖验证
+  - iris_np_performance_reporter.py: 性能报告生成
+
 作者: Path Planning Team
 """
 
 import numpy as np
-from typing import List, Tuple, Optional, Dict, Any
+from typing import List, Tuple, Optional
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon as MplPolygon
 import warnings
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from scipy.spatial import KDTree
 
 from pydrake.geometry.optimization import HPolyhedron
 
@@ -48,7 +53,11 @@ from ..config.iris_np_config import IrisNpConfig
 from .iris_np_region_data import IrisNpRegion, IrisNpResult
 from .iris_np_collision import SimpleCollisionCheckerForIrisNp
 from .iris_np_expansion import IrisNpExpansion
-from .iris_np_parallel import init_worker, process_single_seed
+from .iris_np_seed_extractor import IrisNpSeedExtractor
+from .iris_np_processor import IrisNpProcessor
+from .iris_np_coverage_checker import IrisNpCoverageChecker
+from .iris_np_performance_reporter import IrisNpPerformanceReporter
+from .iris_np_voronoi_optimizer import VoronoiSeedOptimizer
 
 
 # 尝试导入 Drake
@@ -77,23 +86,69 @@ except ImportError as e:
 
 
 class IrisNpRegionGenerator:
-    """基于 IrisNp 的凸区域生成器"""
+    """
+    基于 IrisNp 的凸区域生成器
+
+    这是模块的主类，负责协调各个子模块完成凸区域生成任务。
+
+    工作流程：
+    1. 初始化：创建碰撞检测器、种子点提取器、处理器、覆盖验证器等子模块
+    2. 生成区域：从路径中提取种子点，使用 IrisNp 算法生成凸区域
+    3. 验证覆盖：检查路径是否被凸区域完全覆盖
+    4. 输出结果：返回包含所有凸区域和性能统计的结果对象
+
+    支持两种模式：
+    - 单批扩张模式：一次性提取所有种子点并生成区域（向后兼容）
+    - 两批扩张模式：分两批提取种子点，第二批专注于未覆盖的路径点（推荐）
+
+    Attributes:
+        config: IrisNp 配置参数
+        expansion: IrisNp 膨胀器，负责执行实际的区域膨胀算法
+        seed_extractor: 种子点提取器，负责从路径中提取种子点
+        processor: 种子点处理器，负责处理种子点并生成凸区域
+        coverage_checker: 覆盖验证器，负责验证路径是否被完全覆盖
+        reporter: 性能报告生成器，负责生成性能统计报告
+    """
 
     def __init__(self, config: Optional[IrisNpConfig] = None):
         """
         初始化 IrisNp 凸区域生成器
 
         Args:
-            config: IrisNp 配置参数
+            config: IrisNp 配置参数，如果为 None 则使用默认配置
+
+        Raises:
+            RuntimeError: 如果 Drak e 未安装
+
+        Note:
+            初始化时会创建以下子模块：
+            - IrisNpExpansion: 执行区域膨胀的核心算法
+            - IrisNpSeedExtractor: 从路径中提取种子点
+            - IrisNpProcessor: 处理种子点并生成凸区域
+            - IrisNpCoverageChecker: 验证路径覆盖情况
+            - IrisNpPerformanceReporter: 生成性能报告
         """
+        # 检查 Drake 是否可用
         if not DRAKE_AVAILABLE:
             raise RuntimeError(
                 "Drake 未安装。请使用以下命令安装：\n"
                 "pip install drake"
             )
 
+        # 初始化配置
         self.config = config or IrisNpConfig()
+
+        # 初始化核心膨胀器（负责执行 IrisNp 算法）
         self.expansion = IrisNpExpansion(self.config)
+
+        # 初始化子模块（各司其职，提高代码可维护性）
+        self.seed_extractor = IrisNpSeedExtractor(self.config)
+        self.processor = IrisNpProcessor(self.config, self.expansion)
+        self.coverage_checker = IrisNpCoverageChecker(self.config, self.expansion)
+        self.reporter = IrisNpPerformanceReporter(self.config)
+        
+        # 初始化Voronoi优化器（可选）
+        self.voronoi_optimizer = None
 
     def generate_from_path(
         self,
@@ -103,27 +158,60 @@ class IrisNpRegionGenerator:
         origin: Tuple[float, float] = (0.0, 0.0)
     ) -> IrisNpResult:
         """
-        从路径生成凸区域（使用IrisNp）
+        从路径生成凸区域（使用 IrisNp）
 
-        支持两批种子点扩张：
-        - 第一批：正常扩张
-        - 第二批：检查路径点不在任何凸区域内，优先沿路径切线方向膨胀
+        这是模块的主入口方法，协调整个凸区域生成流程。
+
+        工作流程：
+        1. 创建碰撞检测器（支持缓存优化）
+        2. 定义搜索域（边界框）
+        3. 根据配置选择单批或两批扩张模式
+        4. 提取种子点并生成凸区域
+        5. 验证路径覆盖情况
+        6. 收集性能统计并生成报告
+
+        支持两批种子点扩张策略（推荐）：
+        - 第一批：正常扩张，均匀采样路径点
+        - 第二批：检查未覆盖路径点，优先沿路径切线方向膨胀
+        - 第三批（可选）：针对仍未覆盖的点生成小区域
 
         Args:
-            path: 路径点列表 [(x, y, theta), ...]
-            obstacle_map: 障碍物地图
-            resolution: 地图分辨率
-            origin: 地图原点
+            path: 路径点列表，每个元素为 (x, y, theta)
+                  x, y: 位置坐标（米）
+                  theta: 朝向角度（弧度）
+            obstacle_map: 障碍物地图，2D numpy 数组
+                          0 表示自由空间，1 表示障碍物
+            resolution: 地图分辨率（米/像素）
+            origin: 地图原点坐标 (x, y)，默认为 (0.0, 0.0)
 
         Returns:
-            IrisNpResult: 生成的凸区域结果
+            IrisNpResult: 生成的凸区域结果，包含：
+                - regions: 生成的凸区域列表
+                - num_regions: 区域数量
+                - total_area: 总面积
+                - coverage_ratio: 覆盖率
+                - iris_time: IrisNp 算法耗时
+                - postprocess_time: 后处理耗时
+                - total_time: 总耗时
+                - cache_hit_rate: 缓存命中率（如果启用）
+
+        Example:
+            >>> from src.iris_pkg.core.iris_np_region import IrisNpRegionGenerator
+            >>> generator = IrisNpRegionGenerator()
+            >>> result = generator.generate_from_path(path, obstacle_map, 0.05, (0.0, 0.0))
+            >>> print(f"生成了 {result.num_regions} 个凸区域")
         """
         import time
         total_start = time.time()
 
+        # 初始化结果对象
         result = IrisNpResult(config=self.config)
 
+        # ========================================================================
         # Step 1: 创建碰撞检测器
+        # ========================================================================
+        # 碰撞检测器负责检查点是否在障碍物内
+        # 支持缓存优化，大幅提升重复查询的性能
         if self.config.verbose:
             print("\n" + "="*70)
             print("Step 1: 创建碰撞检测器")
@@ -140,321 +228,643 @@ class IrisNpRegionGenerator:
             print(f"  - 缓存启用: {self.config.enable_collision_cache}")
             print(f"  - 批量检测: {self.config.use_batch_collision_check}")
 
-        # Step 2: 定义域（边界框）
+        # ========================================================================
+        # Step 2: 定义搜索域（边界框）
+        # ========================================================================
+        # 搜索域限制了凸区域的最大范围，避免无限膨胀
+        # 使用 HPolyhedron.MakeBox 创建矩形边界框
         domain = self._create_domain(obstacle_map, resolution, origin)
 
-        # 判断是否启用两批扩张
-        if self.config.enable_two_batch_expansion:
-            # ========== 两批扩张模式 ==========
-            if self.config.verbose:
-                print("\n" + "="*70)
-                print("Step 2: 第一批种子点提取（正常扩张）")
-                print("="*70)
+        # ========================================================================
+        # Step 3-5: 根据配置选择扩张模式
+        # ========================================================================
+        # 三种模式：
+        # 1. 两批扩张模式（推荐）：分两批提取种子点，提高覆盖质量
+        # 2. 单批扩张模式（向后兼容）：一次性提取所有种子点
+        # 3. Voronoi优化模式（实验性）：仅使用Voronoi优化，数学最优
 
-            # 第一批：提取种子点
-            first_batch_seeds = self._extract_seed_points(
-                path, obstacle_map, resolution, origin, batch=1
+        if self.config.enable_voronoi_only_mode:
+            # ========== Voronoi优化模式（实验性） ==========
+            # 优势：
+            # - 数学最优性：基于最大空圆定理
+            # - 几何自适应性：自动适应障碍物和路径几何
+            # - 种子点最少：避免冗余采样
+            # 缺点：
+            # - 计算复杂度高：需要迭代生成Voronoi图
+            # - 依赖初始种子点：需要至少3个种子点
+            regions = self._process_voronoi_only_mode(
+                path, obstacle_map, resolution, origin, checker, domain, result
             )
-
-            if self.config.verbose:
-                print(f"第一批提取了 {len(first_batch_seeds)} 个种子点")
-
-            # 第一批：执行 IrisNp 算法
-            if self.config.verbose:
-                print("\n" + "="*70)
-                print("Step 3: 第一批执行 IrisNp 算法（正常扩张）")
-                print("="*70)
-                print(f"膨胀模式: {'椭圆' if self.config.use_ellipse_expansion else '方形'}")
-                print(f"并行处理: {'启用' if self.config.enable_parallel_processing else '禁用'}")
-                if self.config.enable_parallel_processing:
-                    print(f"工作进程数: {self.config.num_parallel_workers}")
-
-            iris_start = time.time()
-
-            # 选择处理模式：并行或串行
-            if self.config.enable_parallel_processing and len(first_batch_seeds) > 1:
-                first_batch_regions = self._process_seeds_parallel(
-                    first_batch_seeds, checker, domain, obstacle_map, resolution, origin
-                )
-            else:
-                first_batch_regions = self._process_seeds_serial(
-                    first_batch_seeds, checker, domain, obstacle_map, resolution, origin
-                )
-
-            result.iris_time = time.time() - iris_start
-
-            if self.config.verbose:
-                print(f"\n第一批 IrisNp 完成，耗时: {result.iris_time:.4f}秒")
-                print(f"成功生成 {len(first_batch_regions)} 个凸区域")
-
-            # 第二批：提取种子点（检查路径点不在任何凸区域内）
-            if self.config.verbose:
-                print("\n" + "="*70)
-                print("Step 4: 第二批种子点提取（检查未覆盖路径点）")
-                print("="*70)
-
-            second_batch_seeds = self._extract_seed_points(
-                path, obstacle_map, resolution, origin, batch=2, existing_regions=first_batch_regions
+        elif self.config.enable_two_batch_expansion:
+            # ========== 两批扩张模式（推荐） ==========
+            # 优势：
+            # - 第一批快速覆盖主要路径
+            # - 第二批针对性处理未覆盖区域
+            # - 第三轮（可选）确保完全覆盖
+            regions = self._process_two_batch_expansion(
+                path, obstacle_map, resolution, origin, checker, domain, result
             )
-
-            if self.config.verbose:
-                print(f"第二批提取了 {len(second_batch_seeds)} 个种子点")
-
-            # 第二批：执行 IrisNp 算法（各向异性膨胀）
-            if len(second_batch_seeds) > 0:
-                if self.config.verbose:
-                    print("\n" + "="*70)
-                    print("Step 5: 第二批执行 IrisNp 算法（各向异性膨胀）")
-                    print("="*70)
-                    print(f"切线/法向膨胀比例: {self.config.tangent_normal_ratio}:1")
-                    print(f"并行处理: {'启用' if self.config.enable_parallel_processing else '禁用'}")
-                    if self.config.enable_parallel_processing:
-                        print(f"工作进程数: {self.config.num_parallel_workers}")
-
-                iris_start_2 = time.time()
-
-                # 选择处理模式：并行或串行
-                if self.config.enable_parallel_processing and len(second_batch_seeds) > 1:
-                    second_batch_regions = self._process_seeds_parallel(
-                        second_batch_seeds, checker, domain, obstacle_map, resolution, origin
-                    )
-                else:
-                    second_batch_regions = self._process_seeds_serial(
-                        second_batch_seeds, checker, domain, obstacle_map, resolution, origin
-                    )
-
-                result.iris_time += time.time() - iris_start_2
-
-                if self.config.verbose:
-                    print(f"\n第二批 IrisNp 完成，耗时: {time.time() - iris_start_2:.4f}秒")
-                    print(f"成功生成 {len(second_batch_regions)} 个凸区域")
-
-                # 合并两批区域
-                regions = first_batch_regions + second_batch_regions
-
-                # 方案2: 第三轮覆盖检查
-                # 检查是否仍有未覆盖的路径点
-                if self.config.strict_coverage_check:
-                    uncovered_indices = self._find_uncovered_points(path, regions)
-                    if len(uncovered_indices) > 0:
-                        if self.config.verbose:
-                            print(f"\n" + "="*70)
-                            print("Step 6: 第三轮针对性覆盖处理")
-                            print("="*70)
-                            print(f"发现 {len(uncovered_indices)} 个未覆盖点，进行第三轮处理")
-
-                        # 第三轮: 为未覆盖点生成小区域
-                        third_batch_regions = self._generate_regions_for_uncovered_points(
-                            path, uncovered_indices, checker, domain, obstacle_map, resolution, origin
-                        )
-
-                        if len(third_batch_regions) > 0:
-                            regions = regions + third_batch_regions
-                            if self.config.verbose:
-                                print(f"第三轮成功生成 {len(third_batch_regions)} 个凸区域")
-                                print(f"总区域数: {len(regions)}")
-            else:
-                regions = first_batch_regions
-
         else:
             # ========== 单批扩张模式（向后兼容） ==========
-            if self.config.verbose:
-                print("\n" + "="*70)
-                print("Step 2: 提取种子点")
-                print("="*70)
-
-            seed_points = self._extract_seed_points(
-                path, obstacle_map, resolution, origin, batch=1
+            # 优势：
+            # - 逻辑简单，易于理解
+            # - 适用于简单场景
+            regions = self._process_single_batch_expansion(
+                path, obstacle_map, resolution, origin, checker, domain, result
             )
 
-            if self.config.verbose:
-                print(f"提取了 {len(seed_points)} 个种子点")
-
-            # 执行 IrisNp 算法
-            if self.config.verbose:
-                print("\n" + "="*70)
-                print("Step 3: 执行 IrisNp 算法")
-                print("="*70)
-                print(f"膨胀模式: {'椭圆' if self.config.use_ellipse_expansion else '方形'}")
-                print(f"并行处理: {'启用' if self.config.enable_parallel_processing else '禁用'}")
-                if self.config.enable_parallel_processing:
-                    print(f"工作进程数: {self.config.num_parallel_workers}")
-
-            iris_start = time.time()
-
-            # 选择处理模式：并行或串行
-            if self.config.enable_parallel_processing and len(seed_points) > 1:
-                regions = self._process_seeds_parallel(
-                    seed_points, checker, domain, obstacle_map, resolution, origin
-                )
-            else:
-                regions = self._process_seeds_serial(
-                    seed_points, checker, domain, obstacle_map, resolution, origin
-                )
-
-            result.iris_time = time.time() - iris_start
-
-            if self.config.verbose:
-                print(f"\nIrisNp 完成，耗时: {result.iris_time:.4f}秒")
-                print(f"成功生成 {len(regions)} 个凸区域")
-
+        # ========================================================================
         # Step 6: 后处理
+        # ========================================================================
         postprocess_start = time.time()
 
         # 验证路径覆盖
+        # 检查路径上的每个点是否至少在一个凸区域内
         if self.config.strict_coverage_check:
-            coverage_result = self._verify_path_coverage(path, regions)
+            coverage_result = self.coverage_checker.verify_path_coverage(path, regions)
             if self.config.verbose:
                 print(f"\n路径覆盖验证: {'通过' if coverage_result else '未通过'}")
 
         result.postprocess_time = time.time() - postprocess_start
 
-        # 收集性能统计
+        # ========================================================================
+        # Step 7: 收集性能统计
+        # ========================================================================
+        # 碰撞检测缓存统计
         if self.config.enable_collision_cache:
             cache_stats = checker.get_cache_stats()
             result.cache_hit_rate = cache_stats['hit_rate']
 
-        # 统计信息
+        # 区域统计
         result.regions = regions
         result.num_regions = len(regions)
         result.total_area = sum(r.area for r in regions)
 
-        # 计算覆盖率
+        # 覆盖率计算
+        # 覆盖率 = 凸区域总面积 / 自由空间总面积
         total_free_space = np.sum(obstacle_map == 0) * resolution * resolution
         result.coverage_ratio = result.total_area / total_free_space if total_free_space > 0 else 0.0
 
+        # 总耗时
         result.total_time = time.time() - total_start
 
-        # 输出性能报告
+        # ========================================================================
+        # Step 8: 输出性能报告
+        # ========================================================================
         if self.config.enable_profiling:
-            self._print_performance_report(result, checker)
+            self.reporter.print_performance_report(result, checker)
 
         return result
 
-    def _print_performance_report(
+    def _process_two_batch_expansion(
         self,
-        result: IrisNpResult,
-        checker: SimpleCollisionCheckerForIrisNp
-    ):
-        """打印性能报告"""
-        print("\n" + "="*70)
-        print("IrisNp 处理完成")
-        print("="*70)
-        print(f"总区域数: {result.num_regions}")
-        print(f"总面积: {result.total_area:.2f} 平方米")
-        print(f"覆盖率: {result.coverage_ratio*100:.1f}%")
-        print(f"\n性能统计:")
-        print(f"  - 总耗时: {result.total_time:.4f}秒")
-        print(f"  - IrisNp 耗时: {result.iris_time:.4f}秒")
-        print(f"  - 后处理耗时: {result.postprocess_time:.4f}秒")
-
-        if self.config.enable_collision_cache:
-            cache_stats = checker.get_cache_stats()
-            print(f"  - 缓存命中率: {cache_stats['hit_rate']*100:.1f}%")
-            print(f"  - 缓存大小: {cache_stats['cache_size']}")
-
-        print(f"\n配置信息:")
-        print(f"  - 膨胀模式: {'椭圆' if self.config.use_ellipse_expansion else '方形'}")
-        print(f"  - 初始区域大小: {self.config.initial_region_size}")
-        print(f"  - 最大区域大小: {self.config.max_region_size}")
-        print(f"  - 膨胀步长: {self.config.size_increment}")
-
-    def _process_seeds_serial(
-        self,
-        seed_points: List[Tuple[np.ndarray, Optional[np.ndarray]]],
-        checker: SimpleCollisionCheckerForIrisNp,
-        domain: HPolyhedron,
+        path: List[Tuple[float, float, float]],
         obstacle_map: np.ndarray,
         resolution: float,
-        origin: Tuple[float, float]
+        origin: Tuple[float, float],
+        checker: SimpleCollisionCheckerForIrisNp,
+        domain: HPolyhedron,
+        result: IrisNpResult
     ) -> List[IrisNpRegion]:
-        """串行处理种子点（支持切线方向）"""
-        regions = []
+        """
+        处理两批扩张模式
 
-        for i, (seed_point, tangent_direction) in enumerate(seed_points):
+        这是最推荐的扩张策略，分三个阶段完成路径覆盖：
+
+        第一阶段：正常扩张
+        - 均匀采样路径点作为种子点
+        - 使用标准膨胀参数生成凸区域
+        - 快速覆盖路径的主要部分
+
+        第二阶段：针对性扩张
+        - 检查路径上未被覆盖的点
+        - 在未覆盖点附近提取新的种子点
+        - 使用各向异性膨胀（沿切线方向优先）
+
+        第三阶段：补充扩张（可选）
+        - 如果仍有未覆盖点，进行聚类
+        - 为每个簇生成小区域
+        - 确保路径完全被覆盖
+
+        Args:
+            path: 路径点列表
+            obstacle_map: 障碍物地图
+            resolution: 地图分辨率
+            origin: 地图原点
+            checker: 碰撞检测器
+            domain: 搜索域
+            result: 结果对象（用于记录耗时）
+
+        Returns:
+            生成的凸区域列表
+
+        Note:
+            两批扩张的优势：
+            1. 提高覆盖质量：第二批针对性处理遗漏区域
+            2. 减少区域数量：避免过度重叠
+            3. 优化计算效率：第一批快速，第二批精准
+        """
+        import time
+
+        # ========================================================================
+        # 第一批：正常扩张
+        # ========================================================================
+        # 目标：快速覆盖路径的主要部分
+        # 策略：均匀采样路径点，使用标准膨胀参数
+
+        if self.config.verbose:
+            print("\n" + "="*70)
+            print("Step 2: 第一批种子点提取（正常扩张）")
+            print("="*70)
+
+        # 提取第一批种子点
+        # batch=1 表示第一批，使用均匀采样策略
+        first_batch_seeds = self.seed_extractor.extract_seed_points(
+            path, obstacle_map, resolution, origin, batch=1
+        )
+
+        if self.config.verbose:
+            print(f"第一批提取了 {len(first_batch_seeds)} 个种子点")
+
+        # 执行第一批 IrisNp 算法
+        if self.config.verbose:
+            print("\n" + "="*70)
+            print("Step 3: 第一批执行 IrisNp 算法（正常扩张）")
+            print("="*70)
+            print(f"膨胀模式: {'椭圆' if self.config.use_ellipse_expansion else '方形'}")
+            print(f"并行处理: {'启用' if self.config.enable_parallel_processing else '禁用'}")
+            if self.config.enable_parallel_processing:
+                print(f"工作进程数: {self.config.num_parallel_workers}")
+
+        iris_start = time.time()
+
+        # 处理种子点，生成凸区域
+        # processor 会自动选择串行或并行处理模式
+        first_batch_regions = self.processor.process_seeds(
+            first_batch_seeds, checker, domain, obstacle_map, resolution, origin
+        )
+
+        result.iris_time = time.time() - iris_start
+
+        if self.config.verbose:
+            print(f"\n第一批 IrisNp 完成，耗时: {result.iris_time:.4f}秒")
+            print(f"成功生成 {len(first_batch_regions)} 个凸区域")
+
+        # ========================================================================
+        # Voronoi优化（可选）
+        # ========================================================================
+        # 目标：基于Voronoi图优化种子点位置，提高覆盖效率
+        # 策略：
+        # 1. 提取当前种子点
+        # 2. 生成Voronoi图
+        # 3. 评估Voronoi顶点
+        # 4. 添加最优顶点作为新种子点
+
+        if self.config.enable_voronoi_optimization and len(first_batch_regions) >= 3:
             if self.config.verbose:
-                print(f"处理种子点 {i+1}/{len(seed_points)}: ({seed_point[0]:.2f}, {seed_point[1]:.2f})")
-                if tangent_direction is not None:
-                    print(f"  切线方向: ({tangent_direction[0]:.2f}, {tangent_direction[1]:.2f})")
+                print("\n" + "="*70)
+                print("Voronoi优化：基于最大空圆定理优化种子点")
+                print("="*70)
 
-            try:
-                region = self.expansion.simplified_iris_with_sampling(
-                    checker, seed_point, domain, obstacle_map, resolution, origin, tangent_direction
+            # 初始化Voronoi优化器
+            if self.voronoi_optimizer is None:
+                self.voronoi_optimizer = VoronoiSeedOptimizer(
+                    obstacle_map, resolution, origin, self.coverage_checker
                 )
 
-                if region is not None:
-                    regions.append(region)
-                    if self.config.verbose:
-                        print(f"  ✓ 生成区域，面积: {region.area:.2f} 平方米")
-                else:
-                    if self.config.verbose:
-                        print(f"  ✗ 未能生成有效区域")
-            except Exception as e:
+            # 提取当前种子点
+            current_seeds = [region.seed_point for region in first_batch_regions]
+
+            # Voronoi优化
+            voronoi_start = time.time()
+            optimized_seeds = self.voronoi_optimizer.optimize(
+                current_seeds, path,
+                max_iterations=self.config.voronoi_max_iterations,
+                max_new_seeds=self.config.voronoi_max_new_seeds
+            )
+            voronoi_time = time.time() - voronoi_start
+
+            if self.config.verbose:
+                print(f"Voronoi优化完成，耗时: {voronoi_time:.4f}秒")
+                print(f"种子点数量: {len(current_seeds)} → {len(optimized_seeds)}")
+
+            # 如果有新增种子点，生成新区域
+            if len(optimized_seeds) > len(current_seeds):
+                new_seeds = optimized_seeds[len(current_seeds):]
+
                 if self.config.verbose:
-                    print(f"  ✗ IrisNp 失败: {e}")
+                    print(f"新增 {len(new_seeds)} 个种子点，生成新区域")
+
+                # 处理新增种子点
+                new_seeds_formatted = [(seed, None) for seed in new_seeds]
+                new_regions = self.processor.process_seeds(
+                    new_seeds_formatted, checker, domain, obstacle_map, resolution, origin
+                )
+
+                # 合并区域
+                first_batch_regions = first_batch_regions + new_regions
+
+                if self.config.verbose:
+                    print(f"Voronoi优化后总区域数: {len(first_batch_regions)}")
+
+                # 更新耗时
+                result.iris_time += voronoi_time
+
+        # ========================================================================
+        # 第二批：针对性扩张
+        # ========================================================================
+        # 目标：覆盖第一批遗漏的路径点
+        # 策略：
+        # 1. 检查路径上未被覆盖的点
+        # 2. 在未覆盖点附近提取种子点
+        # 3. 使用各向异性膨胀（沿切线方向优先）
+
+        if self.config.verbose:
+            print("\n" + "="*70)
+            print("Step 4: 第二批种子点提取（检查未覆盖路径点）")
+            print("="*70)
+
+        # 提取第二批种子点
+        # batch=2 表示第二批，会检查已生成的区域
+        # existing_regions 参数用于识别未覆盖的路径点
+        second_batch_seeds = self.seed_extractor.extract_seed_points(
+            path, obstacle_map, resolution, origin, batch=2, existing_regions=first_batch_regions
+        )
+
+        if self.config.verbose:
+            print(f"第二批提取了 {len(second_batch_seeds)} 个种子点")
+
+        # 执行第二批 IrisNp 算法
+        if len(second_batch_seeds) > 0:
+            if self.config.verbose:
+                print("\n" + "="*70)
+                print("Step 5: 第二批执行 IrisNp 算法（各向异性膨胀）")
+                print("="*70)
+                print(f"切线/法向膨胀比例: {self.config.tangent_normal_ratio}:1")
+                print(f"并行处理: {'启用' if self.config.enable_parallel_processing else '禁用'}")
+                if self.config.enable_parallel_processing:
+                    print(f"工作进程数: {self.config.num_parallel_workers}")
+
+            iris_start_2 = time.time()
+
+            # 处理第二批种子点
+            # 种子点包含切线方向信息，用于各向异性膨胀
+            second_batch_regions = self.processor.process_seeds(
+                second_batch_seeds, checker, domain, obstacle_map, resolution, origin
+            )
+
+            result.iris_time += time.time() - iris_start_2
+
+            if self.config.verbose:
+                print(f"\n第二批 IrisNp 完成，耗时: {time.time() - iris_start_2:.4f}秒")
+                print(f"成功生成 {len(second_batch_regions)} 个凸区域")
+
+            # 合并两批区域
+            regions = first_batch_regions + second_batch_regions
+
+            # ========================================================================
+            # 第三轮：补充覆盖（可选）
+            # ========================================================================
+            # 目标：确保路径完全被覆盖
+            # 策略：
+            # 1. 检查是否仍有未覆盖的路径点
+            # 2. 对未覆盖点进行聚类
+            # 3. 为每个簇生成小区域
+
+            if self.config.strict_coverage_check:
+                # 查找未覆盖的路径点索引
+                uncovered_indices = self.coverage_checker.find_uncovered_points(path, regions)
+
+                if len(uncovered_indices) > 0:
+                    if self.config.verbose:
+                        print(f"\n" + "="*70)
+                        print("Step 6: 第三轮针对性覆盖处理")
+                        print("="*70)
+                        print(f"发现 {len(uncovered_indices)} 个未覆盖点，进行第三轮处理")
+
+                    # 为未覆盖点生成小区域
+                    # 使用更小的初始区域和更密集的采样
+                    third_batch_regions = self.coverage_checker.generate_regions_for_uncovered_points(
+                        path, uncovered_indices, checker, domain, obstacle_map, resolution, origin
+                    )
+
+                    if len(third_batch_regions) > 0:
+                        regions = regions + third_batch_regions
+                        if self.config.verbose:
+                            print(f"第三轮成功生成 {len(third_batch_regions)} 个凸区域")
+                            print(f"总区域数: {len(regions)}")
+        else:
+            # 第二批没有种子点，说明第一批已经完全覆盖
+            regions = first_batch_regions
 
         return regions
 
-    def _process_seeds_parallel(
+    def _process_single_batch_expansion(
         self,
-        seed_points: List[Tuple[np.ndarray, Optional[np.ndarray]]],
-        checker: SimpleCollisionCheckerForIrisNp,
-        domain: HPolyhedron,
+        path: List[Tuple[float, float, float]],
         obstacle_map: np.ndarray,
         resolution: float,
-        origin: Tuple[float, float]
+        origin: Tuple[float, float],
+        checker: SimpleCollisionCheckerForIrisNp,
+        domain: HPolyhedron,
+        result: IrisNpResult
     ) -> List[IrisNpRegion]:
-        """并行处理种子点（支持切线方向，使用initializer共享资源）"""
-        # 准备参数
-        num_workers = min(self.config.num_parallel_workers, len(seed_points))
+        """
+        处理单批扩张模式（向后兼容）
+
+        这是原始的扩张策略，一次性提取所有种子点并生成凸区域。
+
+        优点：
+        - 逻辑简单，易于理解
+        - 适用于简单场景
+        - 向后兼容旧代码
+
+        缺点：
+        - 可能遗漏某些路径段
+        - 区域数量可能过多
+        - 覆盖质量不如两批扩张
+
+        Args:
+            path: 路径点列表
+            obstacle_map: 障碍物地图
+            resolution: 地图分辨率
+            origin: 地图原点
+            checker: 碰撞检测器
+            domain: 搜索域
+            result: 结果对象（用于记录耗时）
+
+        Returns:
+            生成的凸区域列表
+
+        Note:
+            推荐使用两批扩张模式（enable_two_batch_expansion=True）
+            以获得更好的覆盖质量和计算效率
+        """
+        import time
+
+        # ========================================================================
+        # 提取种子点
+        # ========================================================================
+        # 使用均匀采样策略
+        # batch=1 表示单批模式
 
         if self.config.verbose:
-            print(f"使用 {num_workers} 个工作进程并行处理 {len(seed_points)} 个种子点")
+            print("\n" + "="*70)
+            print("Step 2: 提取种子点")
+            print("="*70)
 
-        # 创建任务列表（简化任务，减少数据传递）
-        tasks = []
-        for i, (seed_point, tangent_direction) in enumerate(seed_points):
-            tasks.append({
-                'seed_id': i,
-                'seed_point': seed_point,
-                'tangent_direction': tangent_direction,
-                'obstacle_map': obstacle_map,
-                'resolution': resolution,
-                'origin': origin,
-                'config': self.config,
-                'domain': domain
-            })
+        seed_points = self.seed_extractor.extract_seed_points(
+            path, obstacle_map, resolution, origin, batch=1
+        )
 
-        regions = []
+        if self.config.verbose:
+            print(f"提取了 {len(seed_points)} 个种子点")
 
-        # 使用进程池并行处理（带initializer）
-        with ProcessPoolExecutor(
-            max_workers=num_workers,
-            initializer=init_worker,
-            initargs=(obstacle_map, resolution, origin, self.config, domain)
-        ) as executor:
-            # 提交所有任务
-            future_to_task = {
-                executor.submit(process_single_seed, task): task for task in tasks
-            }
+        # ========================================================================
+        # 执行 IrisNp 算法
+        # ========================================================================
+        # 处理所有种子点，生成凸区域
+        # processor 会自动选择串行或并行处理模式
 
-            # 收集结果
-            for future in as_completed(future_to_task):
-                task = future_to_task[future]
-                seed_id = task['seed_id']
+        if self.config.verbose:
+            print("\n" + "="*70)
+            print("Step 3: 执行 IrisNp 算法")
+            print("="*70)
+            print(f"膨胀模式: {'椭圆' if self.config.use_ellipse_expansion else '方形'}")
+            print(f"并行处理: {'启用' if self.config.enable_parallel_processing else '禁用'}")
+            if self.config.enable_parallel_processing:
+                print(f"工作进程数: {self.config.num_parallel_workers}")
 
-                try:
-                    region = future.result()
-                    if region is not None:
-                        regions.append(region)
-                        if self.config.verbose:
-                            print(f"  ✓ 种子点 {seed_id+1} 完成，面积: {region.area:.2f} 平方米")
-                    else:
-                        if self.config.verbose:
-                            print(f"  ✗ 种子点 {seed_id+1} 未能生成有效区域")
-                except Exception as e:
+        iris_start = time.time()
+
+        regions = self.processor.process_seeds(
+            seed_points, checker, domain, obstacle_map, resolution, origin
+        )
+
+        result.iris_time = time.time() - iris_start
+
+        if self.config.verbose:
+            print(f"\nIrisNp 完成，耗时: {result.iris_time:.4f}秒")
+            print(f"成功生成 {len(regions)} 个凸区域")
+
+        return regions
+
+    def _process_voronoi_only_mode(
+        self,
+        path: List[Tuple[float, float, float]],
+        obstacle_map: np.ndarray,
+        resolution: float,
+        origin: Tuple[float, float],
+        checker: SimpleCollisionCheckerForIrisNp,
+        domain: HPolyhedron,
+        result: IrisNpResult
+    ) -> List[IrisNpRegion]:
+        """
+        处理Voronoi优化模式（实验性）
+
+        这是基于Voronoi图的纯优化策略，不使用均匀采样。
+
+        核心思想：
+        1. 粗采样：稀疏采样路径点作为初始种子点
+        2. Voronoi优化：迭代添加最优种子点
+        3. 覆盖检查：验证路径是否完全覆盖
+        4. 补充采样：针对未覆盖点进行聚类和补充
+
+        优点：
+        - 数学最优性：基于最大空圆定理，保证种子点位置最优
+        - 几何自适应性：自动适应障碍物形状和路径几何
+        - 种子点最少：避免冗余采样，提高覆盖效率
+        - 全局优化：考虑所有种子点的相互作用
+
+        缺点：
+        - 计算复杂度高：需要迭代生成Voronoi图，O(n log n)
+        - 依赖初始种子点：需要至少3个种子点才能生成Voronoi图
+        - 可能收敛慢：在复杂场景中需要多次迭代
+
+        Args:
+            path: 路径点列表
+            obstacle_map: 障碍物地图
+            resolution: 地图分辨率
+            origin: 地图原点
+            checker: 碰撞检测器
+            domain: 搜索域
+            result: 结果对象（用于记录耗时）
+
+        Returns:
+            生成的凸区域列表
+
+        Note:
+            这是实验性功能，适合复杂场景（不规则障碍物、多分支路径等）。
+            对于简单场景，推荐使用两批扩张模式。
+        """
+        import time
+
+        # ========================================================================
+        # Step 1: 粗采样（初始种子点）
+        # ========================================================================
+        # 目标：提供初始种子点，用于生成Voronoi图
+        # 策略：稀疏采样路径点，避免过度密集
+        # 采样间隔：每隔20个点采样一次
+
+        if self.config.verbose:
+            print("\n" + "="*70)
+            print("Step 2: 粗采样（初始种子点）")
+            print("="*70)
+
+        initial_seeds = []
+        for i in range(0, len(path), 20):
+            x, y, _ = path[i]
+            seed_point = np.array([x, y])
+
+            # 检查是否在自由空间
+            gx = int((x - origin[0]) / resolution)
+            gy = int((y - origin[1]) / resolution)
+
+            if 0 <= gx < obstacle_map.shape[1] and 0 <= gy < obstacle_map.shape[0]:
+                if obstacle_map[gy, gx] == 0:
+                    # 检查与已有种子点的距离
+                    if len(initial_seeds) == 0 or all(
+                        np.linalg.norm(seed_point - sp) >= self.config.min_seed_distance
+                        for sp in initial_seeds
+                    ):
+                        initial_seeds.append(seed_point)
+
+        # 强制包含起点和终点
+        x_start, y_start, _ = path[0]
+        start_point = np.array([x_start, y_start])
+        gx_start = int((x_start - origin[0]) / resolution)
+        gy_start = int((y_start - origin[1]) / resolution)
+
+        if 0 <= gx_start < obstacle_map.shape[1] and 0 <= gy_start < obstacle_map.shape[0]:
+            if obstacle_map[gy_start, gx_start] == 0:
+                if len(initial_seeds) == 0 or all(
+                    np.linalg.norm(start_point - sp) >= self.config.min_seed_distance
+                    for sp in initial_seeds
+                ):
+                    initial_seeds.insert(0, start_point)
+
+        x_end, y_end, _ = path[-1]
+        end_point = np.array([x_end, y_end])
+        gx_end = int((x_end - origin[0]) / resolution)
+        gy_end = int((y_end - origin[1]) / resolution)
+
+        if 0 <= gx_end < obstacle_map.shape[1] and 0 <= gy_end < obstacle_map.shape[0]:
+            if obstacle_map[gy_end, gx_end] == 0:
+                if len(initial_seeds) == 0 or all(
+                    np.linalg.norm(end_point - sp) >= self.config.min_seed_distance
+                    for sp in initial_seeds
+                ):
+                    initial_seeds.append(end_point)
+
+        if self.config.verbose:
+            print(f"粗采样完成，提取了 {len(initial_seeds)} 个初始种子点")
+
+        # ========================================================================
+        # Step 2: Voronoi优化（核心）
+        # ========================================================================
+        # 目标：基于Voronoi图迭代优化种子点
+        # 策略：
+        # 1. 生成初始区域
+        # 2. 提取种子点，生成Voronoi图
+        # 3. 评估Voronoi顶点，添加最优顶点
+        # 4. 重复直到覆盖完整或达到迭代上限
+
+        if self.config.verbose:
+            print("\n" + "="*70)
+            print("Step 3: Voronoi优化（核心）")
+            print("="*70)
+
+        # 初始化Voronoi优化器
+        if self.voronoi_optimizer is None:
+            self.voronoi_optimizer = VoronoiSeedOptimizer(
+                obstacle_map, resolution, origin, self.coverage_checker
+            )
+
+        # 迭代优化
+        current_seeds = initial_seeds.copy()
+        max_iterations = self.config.voronoi_max_iterations
+        iteration = 0
+
+        voronoi_start = time.time()
+
+        while iteration < max_iterations:
+            # 生成当前区域
+            seeds_formatted = [(seed, None) for seed in current_seeds]
+            regions = self.processor.process_seeds(
+                seeds_formatted, checker, domain, obstacle_map, resolution, origin
+            )
+
+            # 检查覆盖
+            if self.voronoi_optimizer._check_coverage(path, regions):
+                if self.config.verbose:
+                    print(f"迭代 {iteration + 1}: 路径已完全覆盖，停止优化")
+                break
+
+            # Voronoi优化
+            optimized_seeds = self.voronoi_optimizer.optimize(
+                current_seeds, path,
+                max_iterations=1,  # 每次只迭代1次
+                max_new_seeds=1  # 每次只添加1个种子点
+            )
+
+            # 检查是否有新增种子点
+            if len(optimized_seeds) <= len(current_seeds):
+                if self.config.verbose:
+                    print(f"迭代 {iteration + 1}: 无新增种子点，停止优化")
+                break
+
+            # 添加新种子点
+            new_seed = optimized_seeds[-1]
+            current_seeds.append(new_seed)
+
+            if self.config.verbose:
+                print(f"迭代 {iteration + 1}: 添加种子点 ({new_seed[0]:.2f}, {new_seed[1]:.2f})")
+                print(f"  当前种子点数: {len(current_seeds)}")
+
+            iteration += 1
+
+        # 最终生成区域
+        seeds_formatted = [(seed, None) for seed in current_seeds]
+        regions = self.processor.process_seeds(
+            seeds_formatted, checker, domain, obstacle_map, resolution, origin
+        )
+
+        result.iris_time = time.time() - voronoi_start
+
+        if self.config.verbose:
+            print(f"\nVoronoi优化完成")
+            print(f"  总迭代次数: {iteration}")
+            print(f"  初始种子点: {len(initial_seeds)}")
+            print(f"  最终种子点: {len(current_seeds)}")
+            print(f"  新增种子点: {len(current_seeds) - len(initial_seeds)}")
+            print(f"  生成区域数: {len(regions)}")
+            print(f"  耗时: {result.iris_time:.4f}秒")
+
+        # ========================================================================
+        # Step 3: 补充覆盖（可选）
+        # ========================================================================
+        # 目标：针对仍未覆盖的点进行聚类和补充
+
+        if self.config.strict_coverage_check:
+            uncovered_indices = self.coverage_checker.find_uncovered_points(path, regions)
+
+            if len(uncovered_indices) > 0:
+                if self.config.verbose:
+                    print(f"\n" + "="*70)
+                    print("Step 4: 补充覆盖")
+                    print("="*70)
+                    print(f"发现 {len(uncovered_indices)} 个未覆盖点")
+
+                # 为未覆盖点生成小区域
+                third_batch_regions = self.coverage_checker.generate_regions_for_uncovered_points(
+                    path, uncovered_indices, checker, domain, obstacle_map, resolution, origin
+                )
+
+                if len(third_batch_regions) > 0:
+                    regions = regions + third_batch_regions
                     if self.config.verbose:
-                        print(f"  ✗ 种子点 {seed_id+1} 失败: {e}")
+                        print(f"补充覆盖成功生成 {len(third_batch_regions)} 个凸区域")
+                        print(f"总区域数: {len(regions)}")
 
         return regions
 
@@ -464,673 +874,47 @@ class IrisNpRegionGenerator:
         resolution: float,
         origin: Tuple[float, float]
     ) -> HPolyhedron:
-        """创建域（边界框）"""
+        """
+        创建搜索域（边界框）
+
+        搜索域限制了凸区域的最大范围，避免无限膨胀。
+        使用 HPolyhedron.MakeBox 创建矩形边界框。
+
+        Args:
+            obstacle_map: 障碍物地图，2D numpy 数组
+            resolution: 地图分辨率（米/像素）
+            origin: 地图原点坐标 (x, y)
+
+        Returns:
+            HPolyhedron: 表示边界框的多面体
+
+        Note:
+            边界框的计算：
+            - x_min = origin[0]
+            - x_max = origin[0] + width * resolution
+            - y_min = origin[1]
+            - y_max = origin[1] + height * resolution
+
+            其中 width 和 height 是 obstacle_map 的列数和行数
+        """
+        # 获取地图尺寸
         height, width = obstacle_map.shape
 
+        # 计算边界框坐标
         x_min = origin[0]
         x_max = origin[0] + width * resolution
         y_min = origin[1]
         y_max = origin[1] + height * resolution
 
         # 创建边界框
+        # lb: lower bound (下界)
+        # ub: upper bound (上界)
         lb = np.array([x_min, y_min])
         ub = np.array([x_max, y_max])
 
         domain = HPolyhedron.MakeBox(lb, ub)
 
         return domain
-
-    def _extract_seed_points(
-        self,
-        path: List[Tuple[float, float, float]],
-        obstacle_map: np.ndarray,
-        resolution: float,
-        origin: Tuple[float, float],
-        batch: int = 1,
-        existing_regions: Optional[List[IrisNpRegion]] = None
-    ) -> List[Tuple[np.ndarray, Optional[np.ndarray]]]:
-        """
-        从路径中提取种子点
-
-        Args:
-            path: 路径点列表
-            obstacle_map: 障碍物地图
-            resolution: 地图分辨率
-            origin: 地图原点
-            batch: 批次 (1=第一批, 2=第二批)
-            existing_regions: 已存在的凸区域列表（用于第二批）
-
-        Returns:
-            种子点列表，每个元素为 (seed_point, tangent_direction)
-            tangent_direction 为路径切线方向，用于第二批各向异性膨胀
-        """
-        seed_points = []
-
-        path_length = len(path)
-        if path_length == 0:
-            return seed_points
-
-        if batch == 1:
-            # 第一批：根据路径长度自适应采样
-            # 计算路径总长度
-            path_total_length = 0.0
-            for i in range(1, path_length):
-                x0, y0, _ = path[i-1]
-                x1, y1, _ = path[i]
-                path_total_length += np.sqrt((x1 - x0)**2 + (y1 - y0)**2)
-
-            # 改进3: 减小密度系数，提高区域重叠度
-            # 从0.3改为0.2，增加种子点密度，提高区域重叠
-            density_factor = 0.2  # 提高种子点密度
-
-            # 根据路径长度和最大种子点数计算采样间隔
-            # 目标：均匀分布种子点，确保路径覆盖
-            if path_total_length > 0:
-                # 计算理想的种子点间距
-                ideal_spacing = path_total_length / (self.config.max_seed_points * density_factor)
-                # 根据分辨率计算采样间隔（点数）
-                sample_interval = max(1, int(ideal_spacing / resolution))
-            else:
-                # 路径长度为0，使用默认间隔
-                sample_interval = max(1, self.config.first_batch_seed_interval)
-
-            # 改进1: 强制包含起点
-            x_start, y_start, _ = path[0]
-            start_point = np.array([x_start, y_start])
-            gx_start = int((x_start - origin[0]) / resolution)
-            gy_start = int((y_start - origin[1]) / resolution)
-
-            if 0 <= gx_start < obstacle_map.shape[1] and 0 <= gy_start < obstacle_map.shape[0]:
-                if obstacle_map[gy_start, gx_start] == 0:  # 自由空间
-                    seed_points.append((start_point, None))
-                    if self.config.verbose:
-                        print(f"  强制添加起点: ({x_start:.2f}, {y_start:.2f})")
-
-            # 均匀采样路径点
-            for i in range(sample_interval, path_length - 1, sample_interval):
-                x, y, _ = path[i]
-                seed_point = np.array([x, y])
-
-                # 检查种子点是否有效（不在障碍物内）
-                gx = int((x - origin[0]) / resolution)
-                gy = int((y - origin[1]) / resolution)
-
-                if 0 <= gx < obstacle_map.shape[1] and 0 <= gy < obstacle_map.shape[0]:
-                    if obstacle_map[gy, gx] == 0:  # 自由空间
-                        # 改进2: 自适应最小距离（根据局部路径密度）
-                        adaptive_min_distance = self._compute_adaptive_min_distance(
-                            path, i, path_total_length
-                        )
-                        # 检查与已有种子点的距离
-                        if self._is_valid_seed_adaptive(seed_point, [sp[0] for sp in seed_points], adaptive_min_distance):
-                            # 第一批不需要切线方向
-                            seed_points.append((seed_point, None))
-
-            # 改进1: 强制包含终点
-            x_end, y_end, _ = path[-1]
-            end_point = np.array([x_end, y_end])
-            gx_end = int((x_end - origin[0]) / resolution)
-            gy_end = int((y_end - origin[1]) / resolution)
-
-            if 0 <= gx_end < obstacle_map.shape[1] and 0 <= gy_end < obstacle_map.shape[0]:
-                if obstacle_map[gy_end, gx_end] == 0:  # 自由空间
-                    # 检查终点是否与已有种子点距离过近
-                    if self._is_valid_seed(end_point, [sp[0] for sp in seed_points]):
-                        seed_points.append((end_point, None))
-                        if self.config.verbose:
-                            print(f"  强制添加终点: ({x_end:.2f}, {y_end:.2f})")
-
-        elif batch == 2:
-            # 第二批：优化策略 - 确保凸区域之间有重叠，避免仅点接触
-            # 选取：完全未被覆盖的路径点 + 周围邻域内未被完全覆盖的路径点
-            if existing_regions is None or len(existing_regions) == 0:
-                return seed_points
-
-            # 构建区域中心的KDTree用于快速查找
-            region_centers = np.array([r.centroid for r in existing_regions])
-            kdtree = KDTree(region_centers)
-
-            # 预计算最大搜索半径（基于最大区域大小）
-            max_region_radius = max(
-                np.max(np.linalg.norm(r.vertices - r.centroid, axis=1))
-                for r in existing_regions
-            )
-            search_radius = max_region_radius * 1.5  # 增加50%的安全裕度
-
-            # 遍历所有路径点
-            for i in range(path_length):
-                x, y, _ = path[i]
-                point = np.array([x, y])
-
-                # 使用KDTree快速查找附近的区域
-                nearby_indices = kdtree.query_ball_point(point, search_radius)
-
-                # 检查点本身是否被覆盖
-                is_covered = False
-                for idx in nearby_indices:
-                    region = existing_regions[idx]
-                    if region.contains(point, tol=1e-6):
-                        is_covered = True
-                        break
-
-                # 判断是否应该作为种子点
-                should_add_seed = False
-
-                # 情况1：点完全未被覆盖
-                if not is_covered:
-                    should_add_seed = True
-                else:
-                    # 情况2：点被覆盖，但检查周围邻域的覆盖情况
-                    # 目的：识别区域边界附近的点，确保区域重叠
-                    coverage_info = self._check_neighborhood_coverage(
-                        point, existing_regions, kdtree, search_radius, resolution
-                    )
-
-                    # 如果邻域内有未覆盖的点，说明该点在区域边界附近
-                    # 添加为种子点可以确保新生成的区域与已有区域重叠
-                    if coverage_info['uncovered_count'] >= 3:
-                        should_add_seed = True
-                        if self.config.verbose:
-                            print(f"  边界点候选: ({x:.2f}, {y:.2f}), "
-                                  f"未覆盖邻居数: {coverage_info['uncovered_count']}/9")
-
-                # 添加种子点
-                if should_add_seed:
-                    # 检查是否在障碍物内
-                    gx = int((x - origin[0]) / resolution)
-                    gy = int((y - origin[1]) / resolution)
-
-                    if 0 <= gx < obstacle_map.shape[1] and 0 <= gy < obstacle_map.shape[0]:
-                        if obstacle_map[gy, gx] == 0:  # 自由空间
-                            # 计算路径切线方向
-                            tangent = self._compute_path_tangent(path, i)
-
-                            # 使用放宽的距离限制
-                            if self._is_valid_seed_relaxed(point, [sp[0] for sp in seed_points], min_distance=0.8):
-                                seed_points.append((point, tangent))
-
-        return seed_points
-
-    def _is_valid_seed(
-        self,
-        candidate: np.ndarray,
-        existing: List[np.ndarray]
-    ) -> bool:
-        """
-        检查种子点是否有效（向量化优化版本）
-
-        Args:
-            candidate: 候选种子点
-            existing: 已存在的种子点列表
-
-        Returns:
-            True 如果候选点有效，False 否则
-        """
-        if len(existing) == 0:
-            return True
-
-        # 向量化计算：将列表转换为数组
-        existing_array = np.array(existing)
-
-        # 计算所有距离（向量化操作）
-        distances = np.linalg.norm(existing_array - candidate, axis=1)
-
-        # 检查是否所有距离都大于最小距离
-        return np.all(distances >= self.config.min_seed_distance)
-
-    def _is_valid_seed_relaxed(
-        self,
-        candidate: np.ndarray,
-        existing: List[np.ndarray],
-        min_distance: float = 0.3
-    ) -> bool:
-        """
-        方案1: 放宽距离限制的种子点验证
-
-        对于未覆盖的路径点,使用更宽松的距离限制
-
-        Args:
-            candidate: 候选种子点
-            existing: 已存在的种子点列表
-            min_distance: 最小距离（默认0.3米，比标准的1.0米更宽松）
-
-        Returns:
-            True 如果候选点有效，False 否则
-        """
-        if len(existing) == 0:
-            return True
-
-        # 向量化计算：将列表转换为数组
-        existing_array = np.array(existing)
-
-        # 计算所有距离（向量化操作）
-        distances = np.linalg.norm(existing_array - candidate, axis=1)
-
-        # 检查是否所有距离都大于最小距离
-        return np.all(distances >= min_distance)
-
-    def _check_neighborhood_coverage(
-        self,
-        point: np.ndarray,
-        existing_regions: List[IrisNpRegion],
-        kdtree: KDTree,
-        search_radius: float,
-        resolution: float
-    ) -> Dict[str, Any]:
-        """
-        检查点周围邻域的覆盖情况
-
-        目的：识别区域边界附近的点，确保新生成的区域与已有区域有重叠
-
-        Args:
-            point: 查询点
-            existing_regions: 已存在的凸区域列表
-            kdtree: 区域中心的KDTree
-            search_radius: 搜索半径
-            resolution: 地图分辨率
-
-        Returns:
-            coverage_info: 包含覆盖信息的字典
-                - covered_count: 被覆盖的邻居数量
-                - uncovered_count: 未被覆盖的邻居数量
-                - coverage_ratio: 覆盖比例
-        """
-        # 定义邻域的9个方向（包括中心点）
-        # 使用网格距离，确保覆盖相邻区域
-        directions = [
-            (0, 0),    # 中心
-            (-1, 0), (1, 0), (0, -1), (0, 1),  # 4邻域
-            (-1, -1), (-1, 1), (1, -1), (1, 1)  # 对角
-        ]
-
-        covered_count = 0
-        uncovered_count = 0
-
-        for dx, dy in directions:
-            # 计算邻居点坐标
-            neighbor = point + np.array([dx, dy]) * resolution
-
-            # 使用KDTree查找附近的区域
-            nearby_indices = kdtree.query_ball_point(neighbor, search_radius)
-
-            # 检查邻居点是否被任何区域覆盖
-            is_covered = False
-            for idx in nearby_indices:
-                region = existing_regions[idx]
-                if region.contains(neighbor, tol=1e-6):
-                    is_covered = True
-                    break
-
-            if is_covered:
-                covered_count += 1
-            else:
-                uncovered_count += 1
-
-        total_count = len(directions)
-        coverage_ratio = covered_count / total_count
-
-        return {
-            'covered_count': covered_count,
-            'uncovered_count': uncovered_count,
-            'coverage_ratio': coverage_ratio
-        }
-
-    def _compute_adaptive_min_distance(
-        self,
-        path: List[Tuple[float, float, float]],
-        index: int,
-        path_total_length: float
-    ) -> float:
-        """
-        改进2: 计算自适应最小距离
-
-        根据局部路径密度动态调整最小距离：
-        - 在狭窄通道或密集区域：减小距离，增加种子点密度
-        - 在开阔区域：保持正常距离
-
-        Args:
-            path: 路径点列表
-            index: 当前点索引
-            path_total_length: 路径总长度
-
-        Returns:
-            自适应的最小距离
-        """
-        # 基础最小距离
-        base_distance = self.config.min_seed_distance
-
-        # 计算局部路径密度（使用前后窗口）
-        window_size = min(10, len(path) // 4)  # 窗口大小
-
-        start_idx = max(0, index - window_size)
-        end_idx = min(len(path) - 1, index + window_size)
-
-        # 计算局部路径长度
-        local_length = 0.0
-        for i in range(start_idx + 1, end_idx + 1):
-            x0, y0, _ = path[i-1]
-            x1, y1, _ = path[i]
-            local_length += np.sqrt((x1 - x0)**2 + (y1 - y0)**2)
-
-        # 计算局部密度（点数/长度）
-        local_density = (end_idx - start_idx + 1) / max(local_length, 0.1)
-
-        # 计算全局平均密度
-        global_density = len(path) / max(path_total_length, 0.1)
-
-        # 根据密度比调整最小距离
-        density_ratio = local_density / global_density
-
-        if density_ratio > 1.5:
-            # 密集区域：减小距离到70%
-            adaptive_distance = base_distance * 0.7
-        elif density_ratio < 0.7:
-            # 稀疏区域：保持正常距离
-            adaptive_distance = base_distance
-        else:
-            # 正常区域：略微减小距离到85%
-            adaptive_distance = base_distance * 0.85
-
-        return adaptive_distance
-
-    def _is_valid_seed_adaptive(
-        self,
-        candidate: np.ndarray,
-        existing: List[np.ndarray],
-        adaptive_min_distance: float
-    ) -> bool:
-        """
-        改进2: 使用自适应最小距离验证种子点
-
-        Args:
-            candidate: 候选种子点
-            existing: 已存在的种子点列表
-            adaptive_min_distance: 自适应的最小距离
-
-        Returns:
-            True 如果候选点有效，False 否则
-        """
-        if len(existing) == 0:
-            return True
-
-        # 向量化计算：将列表转换为数组
-        existing_array = np.array(existing)
-
-        # 计算所有距离（向量化操作）
-        distances = np.linalg.norm(existing_array - candidate, axis=1)
-
-        # 检查是否所有距离都大于自适应最小距离
-        return np.all(distances >= adaptive_min_distance)
-
-    def _compute_path_tangent(
-        self,
-        path: List[Tuple[float, float, float]],
-        index: int
-    ) -> np.ndarray:
-        """
-        计算路径在指定点的切线方向
-
-        Args:
-            path: 路径点列表
-            index: 当前点索引
-
-        Returns:
-            单位切线向量 [tx, ty]
-        """
-        path_length = len(path)
-
-        # 使用前后点计算切线
-        if path_length == 1:
-            # 只有一个点，返回默认方向
-            return np.array([1.0, 0.0])
-
-        if index == 0:
-            # 第一个点：使用前向差分
-            p0 = np.array([path[0][0], path[0][1]])
-            p1 = np.array([path[1][0], path[1][1]])
-            tangent = p1 - p0
-        elif index == path_length - 1:
-            # 最后一个点：使用后向差分
-            p_prev = np.array([path[index-1][0], path[index-1][1]])
-            p_curr = np.array([path[index][0], path[index][1]])
-            tangent = p_curr - p_prev
-        else:
-            # 中间点：使用中心差分
-            p_prev = np.array([path[index-1][0], path[index-1][1]])
-            p_next = np.array([path[index+1][0], path[index+1][1]])
-            tangent = p_next - p_prev
-
-        # 归一化
-        norm = np.linalg.norm(tangent)
-        if norm > 1e-6:
-            tangent = tangent / norm
-        else:
-            tangent = np.array([1.0, 0.0])
-
-        return tangent
-
-    def _verify_path_coverage(
-        self,
-        path: List[Tuple[float, float, float]],
-        regions: List[IrisNpRegion]
-    ) -> bool:
-        """
-        验证路径是否完全被凸区域覆盖
-
-        Args:
-            path: 路径点列表
-            regions: 凸区域列表
-
-        Returns:
-            True 如果路径完全被覆盖，False 否则
-        """
-        if len(path) == 0:
-            return True
-
-        if len(regions) == 0:
-            return False
-
-        # 检查每个路径点
-        uncovered_points = []
-        for i, (x, y, _) in enumerate(path):
-            point = np.array([x, y])
-            is_covered = False
-
-            # 检查点是否在任何区域内
-            for region in regions:
-                if region.contains(point, tol=1e-6):
-                    is_covered = True
-                    break
-
-            if not is_covered:
-                uncovered_points.append(i)
-
-        if len(uncovered_points) > 0:
-            if self.config.verbose:
-                print(f"  警告: 发现 {len(uncovered_points)} 个路径点未被覆盖")
-                print(f"  未覆盖点索引: {uncovered_points[:10]}{'...' if len(uncovered_points) > 10 else ''}")
-            return False
-
-        return True
-
-    def _find_uncovered_points(
-        self,
-        path: List[Tuple[float, float, float]],
-        regions: List[IrisNpRegion]
-    ) -> List[int]:
-        """
-        方案2: 查找未覆盖的路径点索引
-
-        Args:
-            path: 路径点列表
-            regions: 凸区域列表
-
-        Returns:
-            未覆盖点的索引列表
-        """
-        if len(path) == 0 or len(regions) == 0:
-            return list(range(len(path)))
-
-        uncovered_indices = []
-        for i, (x, y, _) in enumerate(path):
-            point = np.array([x, y])
-            is_covered = False
-
-            # 检查点是否在任何区域内
-            for region in regions:
-                if region.contains(point, tol=1e-6):
-                    is_covered = True
-                    break
-
-            if not is_covered:
-                uncovered_indices.append(i)
-
-        return uncovered_indices
-
-    def _generate_regions_for_uncovered_points(
-        self,
-        path: List[Tuple[float, float, float]],
-        uncovered_indices: List[int],
-        checker: SimpleCollisionCheckerForIrisNp,
-        domain: HPolyhedron,
-        obstacle_map: np.ndarray,
-        resolution: float,
-        origin: Tuple[float, float]
-    ) -> List[IrisNpRegion]:
-        """
-        方案2: 为未覆盖点生成小区域
-
-        使用更小的初始区域和更密集的采样,确保覆盖
-
-        Args:
-            path: 路径点列表
-            uncovered_indices: 未覆盖点索引列表
-            checker: 碰撞检测器
-            domain: 定义域
-            obstacle_map: 障碍物地图
-            resolution: 分辨率
-            origin: 原点
-
-        Returns:
-            生成的凸区域列表
-        """
-        regions = []
-
-        # 对未覆盖点进行聚类,避免生成过多重叠区域
-        # 使用简单的距离聚类
-        clusters = self._cluster_uncovered_points(path, uncovered_indices, cluster_distance=2.0)
-
-        if self.config.verbose:
-            print(f"  未覆盖点聚类为 {len(clusters)} 个簇")
-
-        # 为每个簇生成一个区域
-        for cluster_idx, cluster_indices in enumerate(clusters):
-            # 使用簇的中心点作为种子点
-            cluster_points = [path[i] for i in cluster_indices]
-            center_x = sum(p[0] for p in cluster_points) / len(cluster_points)
-            center_y = sum(p[1] for p in cluster_points) / len(cluster_points)
-            seed_point = np.array([center_x, center_y])
-
-            # 检查种子点是否在障碍物内
-            gx = int((center_x - origin[0]) / resolution)
-            gy = int((center_y - origin[1]) / resolution)
-
-            if not (0 <= gx < obstacle_map.shape[1] and 0 <= gy < obstacle_map.shape[0]):
-                continue
-
-            if obstacle_map[gy, gx] > 0:
-                # 如果中心点在障碍物内,尝试使用簇中的其他点
-                found_valid_seed = False
-                for idx in cluster_indices:
-                    x, y, _ = path[idx]
-                    gx = int((x - origin[0]) / resolution)
-                    gy = int((y - origin[1]) / resolution)
-                    if 0 <= gx < obstacle_map.shape[1] and 0 <= gy < obstacle_map.shape[0]:
-                        if obstacle_map[gy, gx] == 0:
-                            seed_point = np.array([x, y])
-                            found_valid_seed = True
-                            break
-                if not found_valid_seed:
-                    continue
-
-            # 使用更小的初始区域生成凸区域
-            try:
-                # 临时修改配置,使用更小的初始区域
-                original_initial_size = self.config.initial_region_size
-                original_max_size = self.config.max_region_size
-
-                # 使用更小的初始区域(0.05米)和更小的最大区域(20米)
-                self.config.initial_region_size = 0.05
-                self.config.max_region_size = 20.0
-
-                region = self.expansion.simplified_iris_with_sampling(
-                    checker, seed_point, domain, obstacle_map, resolution, origin
-                )
-
-                # 恢复原始配置
-                self.config.initial_region_size = original_initial_size
-                self.config.max_region_size = original_max_size
-
-                if region is not None and region.area > 0:
-                    regions.append(region)
-                    if self.config.verbose:
-                        print(f"    ✓ 簇 {cluster_idx + 1} 生成区域成功，面积: {region.area:.2f} 平方米")
-
-            except Exception as e:
-                if self.config.verbose:
-                    print(f"    ✗ 簇 {cluster_idx + 1} 生成区域失败: {e}")
-                continue
-
-        return regions
-
-    def _cluster_uncovered_points(
-        self,
-        path: List[Tuple[float, float, float]],
-        uncovered_indices: List[int],
-        cluster_distance: float = 2.0
-    ) -> List[List[int]]:
-        """
-        对未覆盖点进行聚类
-
-        Args:
-            path: 路径点列表
-            uncovered_indices: 未覆盖点索引列表
-            cluster_distance: 聚类距离阈值
-
-        Returns:
-            聚类结果,每个元素是一个簇的索引列表
-        """
-        if len(uncovered_indices) == 0:
-            return []
-
-        # 简单的贪心聚类算法
-        clusters = []
-        remaining = set(uncovered_indices)
-
-        while remaining:
-            # 选择一个种子点
-            seed_idx = remaining.pop()
-            cluster = [seed_idx]
-
-            # 扩展簇
-            changed = True
-            while changed:
-                changed = False
-                for idx in list(remaining):
-                    # 检查是否与簇中任何点距离小于阈值
-                    for cluster_idx in cluster:
-                        x1, y1, _ = path[idx]
-                        x2, y2, _ = path[cluster_idx]
-                        dist = np.sqrt((x1 - x2)**2 + (y1 - y2)**2)
-                        if dist <= cluster_distance:
-                            cluster.append(idx)
-                            remaining.remove(idx)
-                            changed = True
-                            break
-
-            clusters.append(cluster)
-
-        return clusters
 
 
 def visualize_iris_np_result(
@@ -1141,10 +925,35 @@ def visualize_iris_np_result(
     path: Optional[List[Tuple[float, float, float]]] = None,
     save_path: Optional[str] = None
 ):
-    """可视化 IrisNp 结果"""
+    """
+    可视化 IrisNp 结果
+
+    在地图上绘制：
+    1. 障碍物（灰色）
+    2. 凸区域（彩色半透明）
+    3. 种子点（红色星号）
+    4. 路径（绿色线条）
+    5. 起点和终点（绿色圆圈和红色星号）
+
+    Args:
+        result: IrisNp 结果对象
+        obstacle_map: 障碍物地图
+        resolution: 地图分辨率
+        origin: 地图原点
+        path: 路径点列表（可选）
+        save_path: 保存路径（可选），如果提供则保存图片
+
+    Example:
+        >>> visualize_iris_np_result(result, obstacle_map, 0.05, save_path="result.png")
+    """
+    # 创建图形
     fig, ax = plt.subplots(figsize=(12, 10))
 
+    # ========================================================================
     # 绘制障碍物地图
+    # ========================================================================
+    # 使用 imshow 绘制 2D 地图
+    # extent 参数指定坐标范围
     extent = [
         origin[0],
         origin[0] + obstacle_map.shape[1] * resolution,
@@ -1153,12 +962,19 @@ def visualize_iris_np_result(
     ]
     ax.imshow(obstacle_map, cmap='gray', origin='lower', extent=extent, alpha=0.5)
 
+    # ========================================================================
     # 绘制凸区域
+    # ========================================================================
+    # 使用不同的颜色区分不同的区域
+    # 半透明显示，可以看到重叠部分
     colors = plt.cm.Set3(np.linspace(0, 1, len(result.regions)))
 
     for i, region in enumerate(result.regions):
+        # 获取有序顶点
         vertices = region.get_vertices_ordered()
+
         if len(vertices) >= 3:
+            # 创建多边形
             polygon = MplPolygon(
                 vertices,
                 closed=True,
@@ -1184,19 +1000,32 @@ def visualize_iris_np_result(
                 'r*', markersize=10
             )
 
+    # ========================================================================
     # 绘制路径
+    # ========================================================================
     if path:
         path_x = [p[0] for p in path]
         path_y = [p[1] for p in path]
+
+        # 绘制路径线
         ax.plot(path_x, path_y, 'g-', linewidth=2, label='Path')
+
+        # 绘制起点（绿色圆圈）
         ax.scatter(path_x[0], path_y[0], c='green', s=100, marker='o', label='Start', zorder=5)
+
+        # 绘制终点（红色星号）
         ax.scatter(path_x[-1], path_y[-1], c='red', s=100, marker='*', label='Goal', zorder=5)
 
+    # ========================================================================
+    # 设置图形属性
+    # ========================================================================
     ax.set_xlim(extent[0], extent[1])
     ax.set_ylim(extent[2], extent[3])
     ax.set_aspect('equal')
     ax.grid(True, alpha=0.3)
     ax.legend(loc='upper right')
+
+    # 设置标题
     ax.set_title(
         f'IrisNp Convex Regions ({result.num_regions} regions, '
         f'Area: {result.total_area:.2f} m²)',
@@ -1207,6 +1036,7 @@ def visualize_iris_np_result(
 
     plt.tight_layout()
 
+    # 保存图片
     if save_path:
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
         print(f"可视化结果已保存至: {save_path}")
@@ -1215,11 +1045,29 @@ def visualize_iris_np_result(
     plt.close()
 
 
+# ============================================================================
 # 兼容性检查函数
+# ============================================================================
+
 def check_drake_availability() -> bool:
-    """检查 Drake 是否可用"""
+    """
+    检查 Drake 是否可用
+
+    Returns:
+        True 如果 Drake 可用，False 否则
+
+    Example:
+        >>> if check_drake_availability():
+        ...     print("Drake 可用")
+        ... else:
+        ...     print("请安装 Drake: pip install drake")
+    """
     return DRAKE_AVAILABLE
 
+
+# ============================================================================
+# 主程序入口
+# ============================================================================
 
 if __name__ == "__main__":
     print("="*70)

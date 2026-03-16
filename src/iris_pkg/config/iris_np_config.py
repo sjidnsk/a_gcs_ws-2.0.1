@@ -49,9 +49,13 @@ class IrisNpConfig:
     use_ellipse_expansion: bool = True  # 向后兼容
 
     # 多方向独立膨胀
-    use_adaptive_expansion: bool = True  # 使用自适应膨胀（向后兼容）
-    num_expansion_directions: int = 10  # 膨胀方向数量
+    # use_adaptive_expansion: bool = True  # 使用自适应膨胀（向后兼容）
+    num_expansion_directions: int = 32  # 膨胀方向数量
     direction_tolerance: float = 0.01  # 方向膨胀容差（向后兼容）
+
+    use_adaptive_expansion = True
+    use_ellipse_expansion = False
+    # enable_two_batch_expansion = True
 
     # 区域合并（向后兼容）
     merge_overlapping_regions: bool = True
@@ -87,3 +91,9 @@ class IrisNpConfig:
 
     # 椭圆膨胀参数
     ellipse_aspect_ratio: float = 1.5  # 椭圆长宽比
+
+    # Voronoi优化参数
+    enable_voronoi_optimization: bool = False  # 启用Voronoi优化（在两批扩张中）
+    enable_voronoi_only_mode: bool = True  # 启用Voronoi优化模式（实验性，仅使用Voronoi）
+    voronoi_max_iterations: int = 10  # Voronoi优化最大迭代次数
+    voronoi_max_new_seeds: int = 20  # Voronoi优化最多新增种子点数量

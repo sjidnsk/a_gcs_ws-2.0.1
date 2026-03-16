@@ -362,10 +362,10 @@ def get_high_safety_config() -> IrisNpConfigOptimized:
         configuration_space_margin=0.25,
         
         # 膨胀参数
-        adaptive_initial_step=0.5,
+        adaptive_initial_step=1.0,
         adaptive_min_step=0.0001,
         adaptive_step_reduction=0.3,
-        num_expansion_directions=12,
+        num_expansion_directions=16,
         termination_threshold=0.001,
         
         # 性能

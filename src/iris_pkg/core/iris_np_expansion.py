@@ -128,20 +128,19 @@ class IrisNpExpansion:
         tangent_direction: Optional[np.ndarray] = None
     ) -> Optional[IrisNpRegion]:
         """
-        优化的自适应步长膨胀
+        优化的自适应步长膨胀（改进版）
 
-        优化点：
-        1. 动态调整迭代次数（基于最大尺寸和最小步长）
-        2. 避免重复创建区域对象（使用快速碰撞检查）
-        3. 多层次早期退出机制（收敛判断、步长检查、面积增长检查）
-        4. 向量化操作减少循环开销
+        改进点：
+        1. 方向级别的独立收敛机制
+        2. 每个方向维护独立的碰撞计数器
+        3. 碰撞后更激进的步长衰减
+        4. 基于收敛方向比例的全局退出策略
 
         特点：
-        1. 大步长快速膨胀
-        2. 遇到障碍物时自动减小步长
-        3. 精确定位边界
-        4. 所有方向均衡膨胀
-        5. 支持各向异性膨胀（切线优先，法向限制）
+        1. 遇到障碍物的方向快速收敛，不再浪费计算
+        2. 未遇到障碍物的方向继续膨胀到最大尺寸
+        3. 所有方向均衡膨胀
+        4. 支持各向异性膨胀（切线优先，法向限制）
         """
         num_directions = len(directions)
         max_size = self.config.max_region_size
@@ -151,31 +150,36 @@ class IrisNpExpansion:
         min_step = self.config.adaptive_min_step
         step_reduction = self.config.adaptive_step_reduction
 
+        # 改进1: 添加方向级别的收敛状态跟踪
+        collision_counts = np.zeros(num_directions, dtype=int)  # 每个方向的连续碰撞次数
+        max_collision_count = 3  # 连续碰撞3次后认为该方向收敛
+
         # 如果提供了切线方向，应用各向异性膨胀（向量化）
         if tangent_direction is not None:
-            # 向量化计算所有方向与切线的夹角余弦值
             cos_angles = np.abs(np.dot(directions, tangent_direction))
-            # 根据夹角调整步长：切线方向步长更大
             step_sizes *= (1.0 + (self.config.tangent_normal_ratio - 1.0) * cos_angles)
 
-        # 优化1: 动态调整最大迭代次数
-        # 根据最大尺寸和最小步长计算合理的迭代次数
+        # 动态调整最大迭代次数
         max_iterations = min(50, int(max_size / min_step) + 10)
 
-        # 优化2: 多层次早期退出机制
-        no_improvement_count = 0
-        max_no_improvement = 15  # 连续15次没有改进则退出
-        prev_area = 0.0
-        convergence_threshold = 0.001  # 面积增长小于1%时认为收敛
-        area_check_interval = 5  # 每5次迭代检查一次面积
+        # 改进2: 基于收敛方向比例的退出策略
+        converged_stable_count = 0
+        max_converged_stable = 5  # 收敛方向数量稳定5次后退出
 
         for iteration in range(max_iterations):
-            improved = False
             improved_count = 0
+            converged_count = 0
 
             for i in range(num_directions):
-                # 如果步长已经很小，跳过
+                # 改进3: 如果该方向已收敛，跳过
+                if collision_counts[i] >= max_collision_count:
+                    converged_count += 1
+                    continue
+
+                # 如果步长已经很小，也认为收敛
                 if step_sizes[i] < min_step:
+                    collision_counts[i] = max_collision_count
+                    converged_count += 1
                     continue
 
                 # 尝试膨胀
@@ -184,59 +188,50 @@ class IrisNpExpansion:
                 # 限制最大尺寸
                 if new_distance > max_size:
                     new_distance = max_size
+                    # 达到最大尺寸也算收敛
+                    if expansion_distances[i] >= max_size * 0.95:
+                        collision_counts[i] = max_collision_count
+                        converged_count += 1
+                        continue
 
-                # 优化3: 使用快速碰撞检查（避免创建完整区域对象）
-                # 只检查边界点是否碰撞，而不是整个区域
+                # 使用快速碰撞检查
                 if quick_boundary_collision_check(
                     self.config, checker, seed_point, directions[i], new_distance, resolution
                 ):
-                    # 碰撞，减小步长
+                    # 改进4: 碰撞后更激进的步长衰减
                     step_sizes[i] *= step_reduction
+                    collision_counts[i] += 1
+
+                    # 改进5: 连续碰撞多次后，大幅减小步长以快速收敛
+                    if collision_counts[i] >= 2:
+                        step_sizes[i] *= step_reduction  # 再次衰减
                 else:
                     # 无碰撞，接受膨胀
                     expansion_distances[i] = new_distance
-                    improved = True
                     improved_count += 1
+                    collision_counts[i] = 0  # 重置碰撞计数
 
                     # 如果接近最大尺寸，减小步长
                     if expansion_distances[i] > max_size * 0.8:
                         step_sizes[i] *= step_reduction
 
-            # 优化4: 多层次早期退出
-            # 层次1: 连续无改进检查
-            if improved:
-                no_improvement_count = 0
-            else:
-                no_improvement_count += 1
-                if no_improvement_count >= max_no_improvement:
+            # 改进6: 基于收敛方向比例的退出策略
+            if converged_count >= num_directions * 1.0:  # 100%的方向收敛
+                converged_stable_count += 1
+                if converged_stable_count >= max_converged_stable:
                     if self.config.verbose:
-                        print(f"    早期退出: 连续{max_no_improvement}次无改进")
+                        print(f"    退出: {converged_count}/{num_directions} 方向已收敛")
                     break
+            else:
+                converged_stable_count = 0
 
-            # 层次2: 所有步长都很小
-            if np.all(step_sizes < min_step):
+            # 改进7: 如果所有方向都无改进且大部分已收敛
+            if improved_count == 0 and converged_count >= num_directions * 0.6:
                 if self.config.verbose:
-                    print(f"    早期退出: 所有步长已达到最小值")
+                    print(f"    退出: 无改进且 {converged_count}/{num_directions} 方向已收敛")
                 break
 
-            # 层次3: 面积收敛检查（每N次迭代检查一次）
-            if iteration > 0 and iteration % area_check_interval == 0:
-                current_area = estimate_area_fast(expansion_distances, directions)
-                if prev_area > 0:
-                    area_growth = abs(current_area - prev_area) / prev_area
-                    if area_growth < convergence_threshold:
-                        if self.config.verbose:
-                            print(f"    早期退出: 面积收敛 (增长: {area_growth*100:.2f}%)")
-                        break
-                prev_area = current_area
-
-            # 层次4: 如果大部分方向已经达到最大尺寸
-            if np.sum(expansion_distances >= max_size * 0.95) >= num_directions * 0.7:
-                if self.config.verbose:
-                    print(f"    早期退出: 大部分方向已达到最大尺寸")
-                break
-
-        # 创建最终区域（只创建一次）
+        # 创建最终区域
         final_region = self._create_region_from_directions(
             seed_point, directions, expansion_distances, domain, seed_point
         )
