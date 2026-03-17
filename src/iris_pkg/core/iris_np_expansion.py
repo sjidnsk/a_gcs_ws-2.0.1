@@ -231,6 +231,14 @@ class IrisNpExpansion:
                     print(f"    退出: 无改进且 {converged_count}/{num_directions} 方向已收敛")
                 break
 
+        # # 应用方向协同处理
+        # expansion_distances = self._apply_direction_coordination(
+        #     directions, expansion_distances, seed_point, checker,
+        #     enable_smoothing=False,
+        #     enable_corner_detection=False,
+        #     enable_local_verification=False
+        # )
+
         # 创建最终区域
         final_region = self._create_region_from_directions(
             seed_point, directions, expansion_distances, domain, seed_point
@@ -549,3 +557,234 @@ class IrisNpExpansion:
         except Exception as e:
             warnings.warn(f"创建方向区域失败: {e}")
             return None
+
+    def _smooth_direction_distances(
+        self,
+        directions: np.ndarray,
+        distances: np.ndarray,
+        max_ratio: float = 1.5,
+        iterations: int = 5
+    ) -> np.ndarray:
+        """
+        平滑方向距离，确保连续性
+
+        约束: distances[i] / distances[i-1] ≤ max_ratio
+              distances[i] / distances[i+1] ≤ max_ratio
+
+        Args:
+            directions: 方向向量数组 (N x 2)
+            distances: 距离数组 (N,)
+            max_ratio: 最大平滑比率
+            iterations: 平滑迭代次数
+
+        Returns:
+            平滑后的距离数组
+        """
+        num_directions = len(directions)
+        smoothed = distances.copy()
+
+        for _ in range(iterations):
+            for i in range(num_directions):
+                prev_idx = (i - 1) % num_directions
+                next_idx = (i + 1) % num_directions
+
+                # 计算相邻方向的平均距离
+                avg_neighbor = (smoothed[prev_idx] + smoothed[next_idx]) / 2.0
+
+                # 限制最大比率
+                if smoothed[i] > avg_neighbor * max_ratio:
+                    smoothed[i] = avg_neighbor * max_ratio
+                elif smoothed[i] < avg_neighbor / max_ratio:
+                    smoothed[i] = avg_neighbor / max_ratio
+
+        return smoothed
+
+    def _detect_and_handle_corners(
+        self,
+        directions: np.ndarray,
+        distances: np.ndarray,
+        seed_point: np.ndarray,
+        checker: SimpleCollisionCheckerForIrisNp,
+        corner_threshold: float = 0.5
+    ) -> np.ndarray:
+        """
+        检测夹角情况并处理
+
+        当某个方向距离远小于相邻方向时，可能是夹角限制
+        尝试拉长该方向到相邻方向的平均值
+
+        Args:
+            directions: 方向向量数组 (N x 2)
+            distances: 距离数组 (N,)
+            seed_point: 种子点
+            checker: 碰撞检测器
+            corner_threshold: 夹角阈值（距离比）
+
+        Returns:
+            调整后的距离数组
+        """
+        num_directions = len(directions)
+        adjusted = distances.copy()
+
+        for i in range(num_directions):
+            prev_idx = (i - 1) % num_directions
+            next_idx = (i + 1) % num_directions
+
+            # 检查是否为夹角：当前方向远小于相邻方向
+            if (adjusted[i] < adjusted[prev_idx] * corner_threshold and
+                adjusted[i] < adjusted[next_idx] * corner_threshold):
+
+                # 可能是夹角，尝试拉长
+                target_distance = (adjusted[prev_idx] + adjusted[next_idx]) / 2.0
+                test_point = seed_point + directions[i] * target_distance
+
+                if not checker.check_collision(test_point):
+                    # 可以拉长
+                    adjusted[i] = target_distance
+
+        return adjusted
+
+    def _check_convex_hull_collision(
+        self,
+        vertices: np.ndarray,
+        checker: SimpleCollisionCheckerForIrisNp
+    ) -> bool:
+        """
+        检查凸包是否碰撞
+
+        通过采样凸包内部点进行碰撞检测
+
+        Args:
+            vertices: 凸包顶点 (N x 2)
+            checker: 碰撞检测器
+
+        Returns:
+            True如果碰撞，False否则
+        """
+        if len(vertices) < 3:
+            return True
+
+        # 计算凸包中心
+        centroid = np.mean(vertices, axis=0)
+
+        # 检查中心点
+        if checker.check_collision(centroid):
+            return True
+
+        # 检查边的中点
+        for i in range(len(vertices)):
+            v1 = vertices[i]
+            v2 = vertices[(i + 1) % len(vertices)]
+            midpoint = (v1 + v2) / 2.0
+
+            if checker.check_collision(midpoint):
+                return True
+
+        # 检查顶点到中心的中间点
+        for vertex in vertices:
+            midpoint = (centroid + vertex) / 2.0
+
+            if checker.check_collision(midpoint):
+                return True
+
+        return False
+
+    def _verify_local_convexity(
+        self,
+        directions: np.ndarray,
+        distances: np.ndarray,
+        seed_point: np.ndarray,
+        checker: SimpleCollisionCheckerForIrisNp,
+        window_size: int = 3,
+        shrink_factor: float = 0.9
+    ) -> np.ndarray:
+        """
+        验证局部凸包的有效性
+
+        检查由相邻方向确定的局部凸包是否碰撞
+        如果碰撞，缩小该窗口内所有方向的距离
+
+        Args:
+            directions: 方向向量数组 (N x 2)
+            distances: 距离数组 (N,)
+            seed_point: 种子点
+            checker: 碰撞检测器
+            window_size: 局部窗口大小
+            shrink_factor: 缩小因子
+
+        Returns:
+            验证后的距离数组
+        """
+        num_directions = len(directions)
+        verified = distances.copy()
+
+        for i in range(num_directions):
+            # 获取局部窗口
+            indices = [(i + j) % num_directions for j in range(-window_size, window_size + 1)]
+
+            # 创建局部凸包顶点
+            local_vertices = []
+            for idx in indices:
+                vertex = seed_point + directions[idx] * verified[idx]
+                local_vertices.append(vertex)
+
+            local_vertices = np.array(local_vertices)
+
+            # 检查局部凸包是否碰撞
+            if self._check_convex_hull_collision(local_vertices, checker):
+                # 碰撞，需要调整
+                # 缩小所有方向的距离
+                for idx in indices:
+                    verified[idx] *= shrink_factor
+
+        return verified
+
+    # def _apply_direction_coordination(
+    #     self,
+    #     directions: np.ndarray,
+    #     distances: np.ndarray,
+    #     seed_point: np.ndarray,
+    #     checker: SimpleCollisionCheckerForIrisNp,
+    #     enable_smoothing: bool = True,
+    #     enable_corner_detection: bool = True,
+    #     enable_local_verification: bool = True
+    # ) -> np.ndarray:
+    #     """
+    #     应用方向协同处理
+
+    #     组合平滑、夹角检测和局部验证
+
+    #     Args:
+    #         directions: 方向向量数组 (N x 2)
+    #         distances: 距离数组 (N,)
+    #         seed_point: 种子点
+    #         checker: 碰撞检测器
+    #         enable_smoothing: 是否启用方向平滑
+    #         enable_corner_detection: 是否启用夹角检测
+    #         enable_local_verification: 是否启用局部验证
+
+    #     Returns:
+    #         协同处理后的距离数组
+    #     """
+    #     coordinated = distances.copy()
+
+    #     # 1. 方向平滑
+    #     if enable_smoothing:
+    #         coordinated = self._smooth_direction_distances(
+    #             directions, coordinated, max_ratio=1.5, iterations=5
+    #         )
+
+    #     # 2. 夹角检测与处理
+    #     if enable_corner_detection:
+    #         coordinated = self._detect_and_handle_corners(
+    #             directions, coordinated, seed_point, checker, corner_threshold=0.5
+    #         )
+
+    #     # 3. 局部凸包验证
+    #     if enable_local_verification:
+    #         coordinated = self._verify_local_convexity(
+    #             directions, coordinated, seed_point, checker,
+    #             window_size=3, shrink_factor=0.9
+    #         )
+
+    #     return coordinated

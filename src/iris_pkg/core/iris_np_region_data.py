@@ -159,5 +159,12 @@ class IrisNpResult:
     postprocess_time: float = 0.0
     total_time: float = 0.0
 
+    # 区域修剪统计
+    pruning_time: float = 0.0  # 修剪耗时
+    pruned_count: int = 0  # 被移除的区域数量
+
+    # 碰撞检测缓存统计
+    cache_hit_rate: float = 0.0  # 缓存命中率
+
     # 配置
     config: Any = None

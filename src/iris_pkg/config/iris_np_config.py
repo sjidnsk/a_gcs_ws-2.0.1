@@ -17,7 +17,7 @@ from typing import Optional
 DEFAULT_ITERATION_LIMIT = 100  # 迭代次数上限
 DEFAULT_TERMINATION_THRESHOLD = 0.01  # 终止阈值
 DEFAULT_REGION_SIZE = 0.5  # 区域大小
-DEFAULT_MAX_REGION_SIZE = 10.0  # 最大区域大小
+DEFAULT_MAX_REGION_SIZE = 100.0  # 最大区域大小
 DEFAULT_NUM_DIRECTIONS = 8  # 方向数量
 
 # 性能相关
@@ -44,7 +44,7 @@ class IrisNpConfig:
 
     # 区域生成参数
     initial_region_size: float = 0.1  # 初始区域大小
-    max_region_size: float = 100.0  # 最大区域大小
+    max_region_size: float = 1000.0  # 最大区域大小
     size_increment: float = 0.1  # 区域膨胀步长（向后兼容）
     use_ellipse_expansion: bool = True  # 向后兼容
 
@@ -86,14 +86,18 @@ class IrisNpConfig:
     # 两批种子点扩张参数
     enable_two_batch_expansion: bool = True  # 启用两批种子点扩张
     first_batch_seed_interval: int = 1  # 第一批种子点采样间隔
-    tangent_normal_ratio: float = 2.0  # 切线/法向膨胀比例（第二批）
+    tangent_normal_ratio: float = 5.0  # 切线/法向膨胀比例（第二批）
     strict_coverage_check: bool = True  # 严格检查路径覆盖
 
     # 椭圆膨胀参数
     ellipse_aspect_ratio: float = 1.5  # 椭圆长宽比
 
     # Voronoi优化参数
-    enable_voronoi_optimization: bool = False  # 启用Voronoi优化（在两批扩张中）
-    enable_voronoi_only_mode: bool = True  # 启用Voronoi优化模式（实验性，仅使用Voronoi）
+    enable_voronoi_optimization: bool = True  # 启用Voronoi优化（在两批扩张中）
+    enable_voronoi_only_mode: bool = False  # 启用Voronoi优化模式（实验性，仅使用Voronoi）
     voronoi_max_iterations: int = 10  # Voronoi优化最大迭代次数
     voronoi_max_new_seeds: int = 20  # Voronoi优化最多新增种子点数量
+
+    # 区域修剪参数
+    enable_region_pruning: bool = True  # 启用区域修剪（移除被完全覆盖的冗余区域）
+    pruning_sample_resolution: float = 0.05  # 修剪采样分辨率（米）

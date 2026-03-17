@@ -23,6 +23,7 @@ IrisNp 是 Drake 中实际存在的算法，专门用于机器人配置空间。
   - iris_np_processor.py: 种子点处理（串行/并行）
   - iris_np_coverage_checker.py: 路径覆盖验证
   - iris_np_performance_reporter.py: 性能报告生成
+  - iris_np_region_pruner.py: 区域修剪（移除被完全覆盖的冗余区域）
 
 作者: Path Planning Team
 """
@@ -58,6 +59,7 @@ from .iris_np_processor import IrisNpProcessor
 from .iris_np_coverage_checker import IrisNpCoverageChecker
 from .iris_np_performance_reporter import IrisNpPerformanceReporter
 from .iris_np_voronoi_optimizer import VoronoiSeedOptimizer
+from .iris_np_region_pruner import RegionPruner, PruningResult
 
 
 # 尝试导入 Drake
@@ -146,7 +148,12 @@ class IrisNpRegionGenerator:
         self.processor = IrisNpProcessor(self.config, self.expansion)
         self.coverage_checker = IrisNpCoverageChecker(self.config, self.expansion)
         self.reporter = IrisNpPerformanceReporter(self.config)
-        
+        self.pruner = RegionPruner(
+            verbose=self.config.verbose,
+            use_rtree=self.config.enable_region_pruning,
+            sample_resolution=self.config.pruning_sample_resolution
+        )
+
         # 初始化Voronoi优化器（可选）
         self.voronoi_optimizer = None
 
@@ -284,6 +291,17 @@ class IrisNpRegionGenerator:
             coverage_result = self.coverage_checker.verify_path_coverage(path, regions)
             if self.config.verbose:
                 print(f"\n路径覆盖验证: {'通过' if coverage_result else '未通过'}")
+
+        # 区域修剪：移除被完全覆盖的冗余区域
+        # 在路径覆盖验证之后进行，确保修剪不会影响路径覆盖
+        if self.config.enable_region_pruning:
+            pruning_result = self.pruner.prune(regions)
+            regions = pruning_result.pruned_regions
+            result.pruning_time = pruning_result.pruning_time
+            result.pruned_count = pruning_result.removed_count
+        else:
+            result.pruning_time = 0.0
+            result.pruned_count = 0
 
         result.postprocess_time = time.time() - postprocess_start
 
@@ -800,11 +818,11 @@ class IrisNpRegionGenerator:
                     print(f"迭代 {iteration + 1}: 路径已完全覆盖，停止优化")
                 break
 
-            # Voronoi优化
+            # Voronoi优化（每次迭代只优化一次，内部可能添加多个种子点）
             optimized_seeds = self.voronoi_optimizer.optimize(
                 current_seeds, path,
-                max_iterations=1,  # 每次只迭代1次
-                max_new_seeds=1  # 每次只添加1个种子点
+                max_iterations=1,  # 外层循环控制迭代次数
+                max_new_seeds=self.config.voronoi_max_new_seeds
             )
 
             # 检查是否有新增种子点
@@ -813,12 +831,12 @@ class IrisNpRegionGenerator:
                     print(f"迭代 {iteration + 1}: 无新增种子点，停止优化")
                 break
 
-            # 添加新种子点
-            new_seed = optimized_seeds[-1]
-            current_seeds.append(new_seed)
+            # 添加所有新增种子点
+            new_seeds = optimized_seeds[len(current_seeds):]
+            current_seeds.extend(new_seeds)
 
             if self.config.verbose:
-                print(f"迭代 {iteration + 1}: 添加种子点 ({new_seed[0]:.2f}, {new_seed[1]:.2f})")
+                print(f"迭代 {iteration + 1}: 添加 {len(new_seeds)} 个种子点")
                 print(f"  当前种子点数: {len(current_seeds)}")
 
             iteration += 1
@@ -855,16 +873,48 @@ class IrisNpRegionGenerator:
                     print("="*70)
                     print(f"发现 {len(uncovered_indices)} 个未覆盖点")
 
-                # 为未覆盖点生成小区域
-                third_batch_regions = self.coverage_checker.generate_regions_for_uncovered_points(
-                    path, uncovered_indices, checker, domain, obstacle_map, resolution, origin
-                )
+                # 迭代补充覆盖，直到所有点都被覆盖或达到最大迭代次数
+                max_supplemental_iterations = 5
+                supplemental_iteration = 0
+                total_supplemental_regions = 0
 
-                if len(third_batch_regions) > 0:
-                    regions = regions + third_batch_regions
+                while supplemental_iteration < max_supplemental_iterations:
+                    # 检查当前覆盖情况
+                    uncovered_indices = self.coverage_checker.find_uncovered_points(path, regions)
+                    
+                    if len(uncovered_indices) == 0:
+                        if self.config.verbose:
+                            print(f"\n补充覆盖完成：所有路径点已被覆盖")
+                        break
+                    
                     if self.config.verbose:
-                        print(f"补充覆盖成功生成 {len(third_batch_regions)} 个凸区域")
-                        print(f"总区域数: {len(regions)}")
+                        if supplemental_iteration == 0:
+                            print(f"  未覆盖点聚类为 {len(uncovered_indices)} 个簇")
+                        else:
+                            print(f"\n  迭代 {supplemental_iteration + 1}: 发现 {len(uncovered_indices)} 个未覆盖点")
+
+                    # 为未覆盖点生成小区域
+                    third_batch_regions = self.coverage_checker.generate_regions_for_uncovered_points(
+                        path, uncovered_indices, checker, domain, obstacle_map, resolution, origin
+                    )
+
+                    if len(third_batch_regions) == 0:
+                        if self.config.verbose:
+                            print(f"  迭代 {supplemental_iteration + 1}: 无法生成新区域，停止补充覆盖")
+                        break
+                    
+                    regions = regions + third_batch_regions
+                    total_supplemental_regions += len(third_batch_regions)
+                    
+                    if self.config.verbose:
+                        print(f"  迭代 {supplemental_iteration + 1}: 生成 {len(third_batch_regions)} 个凸区域")
+                        print(f"  总区域数: {len(regions)}")
+                    
+                    supplemental_iteration += 1
+                
+                if self.config.verbose and supplemental_iteration == max_supplemental_iterations:
+                    print(f"\n警告: 达到最大补充覆盖迭代次数 ({max_supplemental_iterations})")
+                    print(f"  总共生成 {total_supplemental_regions} 个补充区域")
 
         return regions
 

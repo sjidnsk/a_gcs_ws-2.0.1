@@ -49,10 +49,14 @@ class TrajectoryVisualizer:
         """生成可视化 - 支持2D、3D和4D模式"""
         # 检查是否使用4D GCS（单位向量）
         use_4d = result.used_gcs and hasattr(result, 'gcs_regions_4d') and result.gcs_regions_4d is not None
-        
-        # 检查是否使用3D GCS
-        use_3d = result.used_gcs and hasattr(result, 'gcs_regions_3d') and result.gcs_regions_3d is not None
-        
+
+        # 检查是否使用3D GCS（需要同时检查regions和waypoints的维度）
+        use_3d = False
+        if result.used_gcs and hasattr(result, 'gcs_regions_3d') and result.gcs_regions_3d is not None:
+            # 检查waypoints的维度是否为3D（x, y, theta）
+            if result.gcs_waypoints is not None and result.gcs_waypoints.shape[0] == 3:
+                use_3d = True
+
         if use_4d:
             # 4D可视化（单位向量模式）
             self._visualize_4d_gcs(result, original_path)
@@ -522,20 +526,22 @@ class TrajectoryVisualizer:
             path_thetas = [p[2] for p in original_path]
             ax.plot(path_lengths, path_thetas, 'g-',
                    linewidth=2, label='A* Path (θ profile)', marker='o', markersize=4)
-        
+
         # 绘制GCS轨迹的theta
         if result.gcs_waypoints is not None:
             waypoints = result.gcs_waypoints
-            # 计算GCS轨迹的路径长度
-            gcs_lengths = [0.0]
-            for i in range(1, waypoints.shape[1]):
-                dx = waypoints[0, i] - waypoints[0, i-1]
-                dy = waypoints[1, i] - waypoints[1, i-1]
-                gcs_lengths.append(gcs_lengths[-1] + np.sqrt(dx**2 + dy**2))
-            
-            ax.plot(gcs_lengths, waypoints[2, :], 'r-',
-                   linewidth=2, label='GCS Trajectory (θ profile)')
-        
+            # 检查是否有theta维度（3D或4D模式）
+            if waypoints.shape[0] >= 3:
+                # 计算GCS轨迹的路径长度
+                gcs_lengths = [0.0]
+                for i in range(1, waypoints.shape[1]):
+                    dx = waypoints[0, i] - waypoints[0, i-1]
+                    dy = waypoints[1, i] - waypoints[1, i-1]
+                    gcs_lengths.append(gcs_lengths[-1] + np.sqrt(dx**2 + dy**2))
+
+                ax.plot(gcs_lengths, waypoints[2, :], 'r-',
+                       linewidth=2, label='GCS Trajectory (θ profile)')
+
         ax.set_title('θ Profile Along Path', fontsize=16, fontweight='bold')
         ax.set_xlabel('Path Length (m)')
         ax.set_ylabel('θ (rad)')
@@ -665,16 +671,18 @@ class TrajectoryVisualizer:
         # 绘制GCS轨迹的theta
         if result.gcs_waypoints is not None:
             waypoints = result.gcs_waypoints
-            # 计算GCS轨迹的路径长度
-            gcs_lengths = [0.0]
-            for i in range(1, waypoints.shape[1]):
-                dx = waypoints[0, i] - waypoints[0, i-1]
-                dy = waypoints[1, i] - waypoints[1, i-1]
-                gcs_lengths.append(gcs_lengths[-1] + np.sqrt(dx**2 + dy**2))
-            
-            ax.plot(gcs_lengths, waypoints[2, :], 'r-',
-                   linewidth=2, label='GCS Trajectory (θ profile)')
-        
+            # 检查是否有theta维度（4D模式）
+            if waypoints.shape[0] >= 3:
+                # 计算GCS轨迹的路径长度
+                gcs_lengths = [0.0]
+                for i in range(1, waypoints.shape[1]):
+                    dx = waypoints[0, i] - waypoints[0, i-1]
+                    dy = waypoints[1, i] - waypoints[1, i-1]
+                    gcs_lengths.append(gcs_lengths[-1] + np.sqrt(dx**2 + dy**2))
+
+                ax.plot(gcs_lengths, waypoints[2, :], 'r-',
+                       linewidth=2, label='GCS Trajectory (θ profile)')
+
         ax.set_title('θ Profile Along Path (4D Mode)', fontsize=16, fontweight='bold')
         ax.set_xlabel('Path Length (m)')
         ax.set_ylabel('θ (rad)')

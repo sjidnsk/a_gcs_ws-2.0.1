@@ -148,63 +148,69 @@ class IrisNpCoverageChecker:
         if self.config.verbose:
             print(f"  未覆盖点聚类为 {len(clusters)} 个簇")
 
-        # 为每个簇生成一个区域
+        # 为每个簇生成多个区域（使用簇中的多个点作为种子点）
         for cluster_idx, cluster_indices in enumerate(clusters):
-            # 使用簇的中心点作为种子点
+            # 策略：使用簇中的多个点作为种子点，而不是只用中心点
+            # 优先使用簇的中心点，然后尝试其他点
+            seed_candidates = []
+            
+            # 1. 添加中心点
             cluster_points = [path[i] for i in cluster_indices]
             center_x = sum(p[0] for p in cluster_points) / len(cluster_points)
             center_y = sum(p[1] for p in cluster_points) / len(cluster_points)
-            seed_point = np.array([center_x, center_y])
+            seed_candidates.append(np.array([center_x, center_y]))
+            
+            # 2. 添加簇中的其他点（每隔2个点取一个，避免过多）
+            for i in range(0, len(cluster_indices), max(1, len(cluster_indices) // 3)):
+                idx = cluster_indices[i]
+                x, y, _ = path[idx]
+                seed_candidates.append(np.array([x, y]))
+            
+            # 尝试每个候选种子点
+            region_generated = False
+            for seed_idx, seed_point in enumerate(seed_candidates):
+                # 检查种子点是否在障碍物内
+                gx = int((seed_point[0] - origin[0]) / resolution)
+                gy = int((seed_point[1] - origin[1]) / resolution)
 
-            # 检查种子点是否在障碍物内
-            gx = int((center_x - origin[0]) / resolution)
-            gy = int((center_y - origin[1]) / resolution)
-
-            if not (0 <= gx < obstacle_map.shape[1] and 0 <= gy < obstacle_map.shape[0]):
-                continue
-
-            if obstacle_map[gy, gx] > 0:
-                # 如果中心点在障碍物内,尝试使用簇中的其他点
-                found_valid_seed = False
-                for idx in cluster_indices:
-                    x, y, _ = path[idx]
-                    gx = int((x - origin[0]) / resolution)
-                    gy = int((y - origin[1]) / resolution)
-                    if 0 <= gx < obstacle_map.shape[1] and 0 <= gy < obstacle_map.shape[0]:
-                        if obstacle_map[gy, gx] == 0:
-                            seed_point = np.array([x, y])
-                            found_valid_seed = True
-                            break
-                if not found_valid_seed:
+                if not (0 <= gx < obstacle_map.shape[1] and 0 <= gy < obstacle_map.shape[0]):
                     continue
 
-            # 使用更小的初始区域生成凸区域
-            try:
-                # 临时修改配置,使用更小的初始区域
-                original_initial_size = self.config.initial_region_size
-                original_max_size = self.config.max_region_size
+                if obstacle_map[gy, gx] > 0:
+                    continue
 
-                # 使用更小的初始区域(0.05米)和更小的最大区域(20米)
-                self.config.initial_region_size = 0.05
-                self.config.max_region_size = 20.0
+                # 使用更小的初始区域生成凸区域
+                try:
+                    # 临时修改配置,使用更小的初始区域
+                    original_initial_size = self.config.initial_region_size
+                    original_max_size = self.config.max_region_size
 
-                region = self.expansion.simplified_iris_with_sampling(
-                    checker, seed_point, domain, obstacle_map, resolution, origin
-                )
+                    # 使用更小的初始区域(0.05米)和更小的最大区域(20米)
+                    self.config.initial_region_size = 0.05
+                    self.config.max_region_size = 20.0
 
-                # 恢复原始配置
-                self.config.initial_region_size = original_initial_size
-                self.config.max_region_size = original_max_size
+                    region = self.expansion.simplified_iris_with_sampling(
+                        checker, seed_point, domain, obstacle_map, resolution, origin
+                    )
 
-                if region is not None and region.area > 0:
-                    regions.append(region)
+                    # 恢复原始配置
+                    self.config.initial_region_size = original_initial_size
+                    self.config.max_region_size = original_max_size
+
+                    if region is not None and region.area > 0:
+                        regions.append(region)
+                        region_generated = True
+                        if self.config.verbose:
+                            print(f"    ✓ 簇 {cluster_idx + 1} 种子点 {seed_idx + 1} 生成区域成功，面积: {region.area:.2f} 平方米")
+                        break  # 成功生成一个区域后，尝试下一个簇
+
+                except Exception as e:
                     if self.config.verbose:
-                        print(f"    ✓ 簇 {cluster_idx + 1} 生成区域成功，面积: {region.area:.2f} 平方米")
-
-            except Exception as e:
-                if self.config.verbose:
-                    print(f"    ✗ 簇 {cluster_idx + 1} 生成区域失败: {e}")
-                continue
+                        print(f"    ✗ 簇 {cluster_idx + 1} 种子点 {seed_idx + 1} 生成区域失败: {e}")
+                    continue
+            
+            if not region_generated and self.config.verbose:
+                print(f"    ✗ 簇 {cluster_idx + 1} 所有种子点都未能生成有效区域")
 
         return regions
 
