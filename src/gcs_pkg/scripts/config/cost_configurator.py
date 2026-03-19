@@ -113,7 +113,7 @@ class CostConfigurator:
         'lunar_standard': CostWeights(
             time=1.0,
             path_length=1.5,
-            energy=2.0,
+            energy=20.0,
             regularization_r=0.3,
             regularization_h=0.3,
             regularization_order=2

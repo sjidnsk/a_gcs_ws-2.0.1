@@ -18,11 +18,20 @@ from .hybrid_theta_constraint import (
     HybridConstraintConfig
 )
 
+from .bezier_reparameterization import (
+    BezierReparameterizer,
+    ReparameterizationConfig,
+    reparameterize_bezier_trajectory
+)
+
 __all__ = [
     'ThetaUnitVectorHandler',
     'UnitVectorConfig',
     'theta_to_unit_vector',
     'unit_vector_to_theta',
     'HybridThetaConstraintStrategy',
-    'HybridConstraintConfig'
+    'HybridConstraintConfig',
+    'BezierReparameterizer',
+    'ReparameterizationConfig',
+    'reparameterize_bezier_trajectory'
 ]

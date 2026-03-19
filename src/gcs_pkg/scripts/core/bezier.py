@@ -490,7 +490,7 @@ class BezierGCS(BaseGCS):
                 if A[i].dot(source) > b[i] + 1e-6:  # 添加小容差
                     return False
             return True
-    def addSourceTarget(self, source, target, edges=None, velocity=None, zero_deriv_boundary=None):
+    def addSourceTarget(self, source, target, edges=None, velocity=None, zero_deriv_boundary=None, min_time_derivative=None):
         """
         添加源点和目标点，并设置边界条件
         
@@ -500,6 +500,7 @@ class BezierGCS(BaseGCS):
             edges (list, optional): 指定的边连接关系
             velocity (array, optional): 边界速度条件 [初始速度, 终止速度]
             zero_deriv_boundary (int, optional): 边界处设为零的导数阶数
+            min_time_derivative (float, optional): 时间轨迹导数的最小值，防止 dh/ds 过小导致速度突变
             
         Returns:
             tuple: (源点边列表, 目标点边列表)
@@ -562,11 +563,11 @@ class BezierGCS(BaseGCS):
                 # 初始点导数为零
                 initial_constraints.append(LinearEqualityConstraint(
                     DecomposeLinearExpressions(np.squeeze(u_path_control[0]), self.u_vars),
-                    np.zeros(self.dimension)))
+                    np.zeros(self.dimension, dtype=float)))
                 # 终止点导数为零
                 final_constraints.append(LinearEqualityConstraint(
                     DecomposeLinearExpressions(np.squeeze(u_path_control[-1]), self.u_vars),
-                    np.zeros(self.dimension)))
+                    np.zeros(self.dimension, dtype=float)))
 
         # 为源点边添加约束
         for edge in source_edges:
@@ -581,6 +582,16 @@ class BezierGCS(BaseGCS):
             if zero_deriv_boundary is not None:
                 for i_con in initial_constraints:
                     edge.AddConstraint(Binding[Constraint](i_con, edge.xv()))
+
+            # 添加时间轨迹导数约束（如果指定），防止 dh/ds 过小导致速度突变
+            if min_time_derivative is not None and min_time_derivative > 0:
+                u_time_deriv = self.u_h_trajectory.MakeDerivative(1).control_points()
+                initial_time_deriv_con = LinearConstraint(
+                    DecomposeLinearExpressions(u_time_deriv[0], self.u_vars),
+                    min_time_derivative * np.ones(1),
+                    np.inf * np.ones(1)
+                )
+                edge.AddConstraint(Binding[Constraint](initial_time_deriv_con, edge.xv()))
 
             # 源点的时间起点为0
             edge.AddConstraint(edge.xv()[-(self.order + 1)] == 0.)
@@ -599,6 +610,16 @@ class BezierGCS(BaseGCS):
             if zero_deriv_boundary is not None:
                 for f_con in final_constraints:
                     edge.AddConstraint(Binding[Constraint](f_con, edge.xu()))
+
+            # 添加时间轨迹导数约束（如果指定），防止 dh/ds 过小导致速度突变
+            if min_time_derivative is not None and min_time_derivative > 0:
+                u_time_deriv = self.u_h_trajectory.MakeDerivative(1).control_points()
+                final_time_deriv_con = LinearConstraint(
+                    DecomposeLinearExpressions(u_time_deriv[-1], self.u_vars),
+                    min_time_derivative * np.ones(1),
+                    np.inf * np.ones(1)
+                )
+                edge.AddConstraint(Binding[Constraint](final_time_deriv_con, edge.xu()))
 
             # 为目标点边添加所有成本函数
             for cost in self.edge_costs:

@@ -56,6 +56,8 @@ class GCSOptimizer:
         self.max_theta_jump = self.config.gcs_max_theta_jump * 2.0
         self.has_energy_cost = hasattr(self.config, '_gcs_energy_weight') and self.config._gcs_energy_weight > 0
         self.energy_weight = getattr(self.config, '_gcs_energy_weight', 0.0)
+        self.zero_velocity_at_boundaries = getattr(self.config, 'gcs_zero_velocity_at_boundaries', True)
+        self.min_time_derivative = getattr(self.config, 'gcs_min_time_derivative', 1.0)
     
     def _preallocate_arrays(self):
         """预分配常用数组，减少运行时内存分配"""
@@ -147,18 +149,31 @@ class GCSOptimizer:
             trajectory = self._solve_gcs_4d(regions, source, target)
             
             if trajectory is not None:
-                # 转换4D轨迹回3D（使用预分配的缓冲区）
-                waypoints_3d = self._convert_4d_to_3d_vectorized(trajectory)
-                
-                result.gcs_waypoints = waypoints_3d
+                # 保存基本结果
                 result.gcs_trajectory = trajectory
                 result.used_gcs = True
                 result.gcs_regions_4d = regions_4d
-                result.gcs_waypoints_4d = trajectory.vector_values(
-                    np.linspace(trajectory.start_time(), trajectory.end_time(), 100)
-                )
                 
-                self._print_success("GCS优化(4D-单位向量)", trajectory)
+                # 重新参数化轨迹（如果启用）
+                if self.config.gcs_enable_reparameterization:
+                    self._reparameterize_4d_trajectory(result, trajectory)
+                    # 使用重参数化后的轨迹
+                    final_trajectory = result.reparameterized_trajectory
+                else:
+                    # 使用原始轨迹
+                    final_trajectory = trajectory
+                
+                # 转换4D轨迹回3D（使用预分配的缓冲区）
+                waypoints_3d = self._convert_4d_to_3d_vectorized(final_trajectory)
+                result.gcs_waypoints = waypoints_3d
+                
+                # 增加采样点数以获得更平滑的速度曲线
+                num_samples = 1000
+                sample_times = np.linspace(final_trajectory.start_time(), final_trajectory.end_time(), num_samples)
+                result.gcs_waypoints_4d = final_trajectory.vector_values(sample_times)
+                result.gcs_sample_times = sample_times  # 保存采样时间用于可视化
+                
+                self._print_success("GCS优化(4D-单位向量)", final_trajectory)
                 return True
             
             return False
@@ -263,15 +278,23 @@ class GCSOptimizer:
         
         gcs = BezierGCS(regions, order=self.gcs_order,
                        continuity=self.gcs_continuity)
-        gcs.addSourceTarget(source, target)
+        
+        # 添加边界条件
+        if self.zero_velocity_at_boundaries:
+            # 使用 zero_deriv_boundary 参数设置一阶导数为零（速度为零）
+            # 添加 min_time_derivative 约束防止 dh/ds 过小导致速度突变
+            gcs.addSourceTarget(source, target, zero_deriv_boundary=1, min_time_derivative=self.min_time_derivative)
+        # else:
+        #     # 不设置边界速度约束
+        #     gcs.addSourceTarget(source, target)
         
         # 添加成本（使用缓存的参数）
         gcs.addTimeCost(weight=self.time_weight)
         gcs.addPathLengthCost(weight=self.path_weight)
         
         # 添加能量成本（使用缓存的参数）
-        if self.has_energy_cost:
-            gcs.addPathEnergyCost(weight=self.energy_weight)
+        # if self.has_energy_cost:
+        gcs.addPathEnergyCost(weight=self.energy_weight)
         
         # 添加速度约束（使用缓存的参数）
         if hasattr(gcs, 'addVelocityLimits'):
@@ -289,7 +312,15 @@ class GCSOptimizer:
         
         gcs = BezierGCS(regions, order=self.gcs_order,
                        continuity=self.gcs_continuity)
-        gcs.addSourceTarget(source, target)
+        
+        # 添加边界条件
+        if self.zero_velocity_at_boundaries:
+            # 使用 zero_deriv_boundary 参数设置一阶导数为零（速度为零）
+            # 添加 min_time_derivative 约束防止 dh/ds 过小导致速度突变
+            gcs.addSourceTarget(source, target, zero_deriv_boundary=1, min_time_derivative=self.min_time_derivative)
+        else:
+            # 不设置边界速度约束
+            gcs.addSourceTarget(source, target)
         
         # 添加成本（使用缓存的参数）
         gcs.addTimeCost(weight=self.time_weight)
@@ -403,3 +434,80 @@ class GCSOptimizer:
         """打印成功信息"""
         traj_time = trajectory.end_time() - trajectory.start_time()
         print(f"[{mode_name}] 成功，轨迹时间: {traj_time:.2f}秒")
+    
+    def _reparameterize_4d_trajectory(self, result: PlannerResult, trajectory):
+        """
+        重新参数化4D轨迹，使得 (u, w) 始终在单位圆上
+        
+        Args:
+            result: 规划结果对象
+            trajectory: GCS优化后的4D轨迹（BezierTrajectory 或 BsplineTrajectory）
+        """
+        try:
+            from iris_pkg.theta.bezier_reparameterization import (
+                BezierReparameterizer,
+                ReparameterizationConfig
+            )
+            
+            # 启动性能监测
+            reparam_metrics = self.perf_monitor.start("重新参数化") if self.perf_monitor else None
+            
+            # 创建重新参数化配置
+            reparam_config = ReparameterizationConfig(
+                projection_method=self.config.gcs_reparameterization_projection_method,
+                check_continuity=self.config.gcs_reparameterization_check_continuity,
+                continuity_order=self.config.gcs_reparameterization_continuity_order,
+                enable_iterative_refinement=self.config.gcs_reparameterization_enable_iterative_refinement,
+                max_iterations=self.config.gcs_reparameterization_max_iterations,
+                enable_smoothing=self.config.gcs_reparameterization_enable_smoothing,
+                smoothing_window=self.config.gcs_reparameterization_smoothing_window,
+                smoothing_iterations=self.config.gcs_reparameterization_smoothing_iterations
+            )
+            
+            # 创建重新参数化器
+            reparameterizer = BezierReparameterizer(reparam_config)
+            
+            # 检查轨迹类型
+            if hasattr(trajectory, 'path_traj'):
+                # BezierTrajectory 类型
+                path_traj = trajectory.path_traj
+                time_traj = trajectory.time_traj
+            else:
+                # BsplineTrajectory 类型
+                path_traj = trajectory
+                time_traj = None
+            
+            # 重新参数化空间轨迹
+            reparameterized_path_traj, metrics = reparameterizer.reparameterize_trajectory(path_traj, dimension=4)
+            
+            # 保存结果
+            if time_traj is not None:
+                # 如果是 BezierTrajectory，重新创建
+                from gcs_pkg.scripts.core.bezier import BezierTrajectory
+                result.reparameterized_trajectory = BezierTrajectory(reparameterized_path_traj, time_traj)
+            else:
+                # 如果是 BsplineTrajectory，直接保存
+                result.reparameterized_trajectory = reparameterized_path_traj
+
+            result.reparameterization_metrics = metrics
+
+            # 结束性能监测
+            if reparam_metrics:
+                reparam_metrics = self.perf_monitor.end("重新参数化")
+                result.reparameterization_time = reparam_metrics.wall_time
+                result.time_breakdown["重新参数化"] = reparam_metrics.wall_time
+            
+            # 打印重新参数化结果
+            print(f"[重新参数化] 成功")
+            if 'original' in metrics and 'projected' in metrics:
+                orig_dev = metrics['original'].get('unit_circle_deviation_max', 0)
+                proj_dev = metrics['projected'].get('unit_circle_deviation_max', 0)
+                print(f"  原始单位圆偏差: {orig_dev:.6f}")
+                print(f"  投影后单位圆偏差: {proj_dev:.6f}")
+            
+        except ImportError:
+            warnings.warn("贝塞尔曲线重新参数化模块未找到，跳过重新参数化")
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            warnings.warn(f"贝塞尔曲线重新参数化失败: {e}")

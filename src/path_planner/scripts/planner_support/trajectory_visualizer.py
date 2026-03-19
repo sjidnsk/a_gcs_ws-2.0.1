@@ -147,17 +147,21 @@ class TrajectoryVisualizer:
         self._visualize_3d_trajectory_standalone(result, original_path)
         
         # 第二张图：其他子图
-        fig = plt.figure(figsize=(20, 12))
+        fig = plt.figure(figsize=(20, 16))
         
         # 创建子图布局
         # 第一行：2D俯视图、单位向量轨迹图、theta随路径变化图
-        ax_2d = fig.add_subplot(231)
-        ax_uv = fig.add_subplot(232)
-        ax_theta = fig.add_subplot(233)
+        ax_2d = fig.add_subplot(331)
+        ax_uv = fig.add_subplot(332)
+        ax_theta = fig.add_subplot(333)
         # 第二行：u随时间变化、w随时间变化、单位圆约束验证
-        ax_u = fig.add_subplot(234)
-        ax_w = fig.add_subplot(235)
-        ax_circle = fig.add_subplot(236)
+        ax_u = fig.add_subplot(334)
+        ax_w = fig.add_subplot(335)
+        ax_circle = fig.add_subplot(336)
+        # 第三行：速度可视化（线速度、角速度、速度大小）
+        ax_v_linear = fig.add_subplot(337)
+        ax_v_angular = fig.add_subplot(338)
+        ax_v_magnitude = fig.add_subplot(339)
         
         # 绘制2D俯视图
         extent = [
@@ -179,6 +183,9 @@ class TrajectoryVisualizer:
         
         # 绘制单位圆约束验证
         self._plot_unit_circle_validation(ax_circle, result)
+        
+        # 绘制速度可视化
+        self._plot_velocity_profile(ax_v_linear, ax_v_angular, ax_v_magnitude, result)
         
         plt.tight_layout()
         
@@ -598,57 +605,37 @@ class TrajectoryVisualizer:
         ax.grid(True, alpha=0.3)
     
     def _plot_unit_vector_trajectory(self, ax, result):
-        """绘制单位向量轨迹"""
+        """绘制单位向量轨迹（简化版）"""
         if result.gcs_waypoints_4d is not None:
             waypoints_4d = result.gcs_waypoints_4d
             u = waypoints_4d[2, :]
             w = waypoints_4d[3, :]
-            
+
             # 绘制单位圆
-            theta_circle = np.linspace(0, 2*np.pi, 100)
-            ax.plot(np.cos(theta_circle), np.sin(theta_circle), 'k--', linewidth=1, label='Unit Circle', alpha=0.5)
-            
-            # 绘制GCS优化轨迹（实际轨迹）
-            ax.plot(u, w, 'b-', linewidth=2.5, label='GCS Trajectory (Actual)', zorder=4)
-            
-            # 绘制理想轨迹（单位圆上的弧）
-            from iris_pkg.theta.theta_unit_vector_handler import unit_vector_to_theta
-            theta_start = unit_vector_to_theta(u[0], w[0], normalize=True)
-            theta_end = unit_vector_to_theta(u[-1], w[-1], normalize=True)
-            
-            # 计算最短路径
-            theta_diff = theta_end - theta_start
-            if theta_diff > np.pi:
-                theta_diff -= 2 * np.pi
-            elif theta_diff < -np.pi:
-                theta_diff += 2 * np.pi
-            
-            # 生成理想轨迹（单位圆上的弧）
-            theta_ideal = np.linspace(theta_start, theta_start + theta_diff, 50)
-            u_ideal = np.cos(theta_ideal)
-            w_ideal = np.sin(theta_ideal)
-            
-            ax.plot(u_ideal, w_ideal, 'r--', linewidth=2, label='Ideal Arc (on Unit Circle)', 
-                   alpha=0.7, zorder=3)
-            
+            theta_circle = np.linspace(0, 2*np.pi, 200)
+            ax.plot(np.cos(theta_circle), np.sin(theta_circle), 'k--', linewidth=1.5, label='Unit Circle', alpha=0.4)
+
+            # 绘制GCS优化轨迹（实际轨迹）- 单色蓝色
+            ax.plot(u, w, 'b-', linewidth=2.5, label='GCS Trajectory', zorder=3)
+
             # 绘制起点和终点
-            ax.scatter([u[0]], [w[0]], c='#27ae60', s=150, marker='o', label='Start', zorder=5, edgecolors='black', linewidths=1.5)
-            ax.scatter([u[-1]], [w[-1]], c='#e74c3c', s=150, marker='*', label='Goal', zorder=5, edgecolors='black', linewidths=1.5)
-            
-            # 添加说明文本
-            ax.text(0.02, 0.98, 
-                   f'Blue: GCS optimized trajectory\nRed: Ideal arc on unit circle\nBlack: Unit circle boundary',
-                   transform=ax.transAxes, fontsize=10, verticalalignment='top',
-                   bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-            
+            ax.scatter([u[0]], [w[0]], c='#27ae60', s=200, marker='o', label='Start', zorder=4,
+                      edgecolors='black', linewidths=2)
+            ax.scatter([u[-1]], [w[-1]], c='#e74c3c', s=250, marker='*', label='Goal', zorder=4,
+                      edgecolors='black', linewidths=2)
+
             ax.set_title('Unit Vector Trajectory (u, w)', fontsize=16, fontweight='bold')
-            ax.set_xlabel('u = cos(θ)')
-            ax.set_ylabel('w = sin(θ)')
-            ax.legend(loc='upper right', fontsize=10, framealpha=0.9)
+            ax.set_xlabel('u = cos(θ)', fontsize=12, fontweight='bold')
+            ax.set_ylabel('w = sin(θ)', fontsize=12, fontweight='bold')
+            ax.legend(loc='upper right', fontsize=10, framealpha=0.9, ncol=2)
             ax.set_aspect('equal')
-            ax.grid(True, alpha=0.3)
+            ax.grid(True, alpha=0.3, linestyle='-', linewidth=0.5)
             ax.set_xlim([-1.5, 1.5])
             ax.set_ylim([-1.5, 1.5])
+
+            # 添加十字参考线
+            ax.axhline(y=0, color='gray', linestyle=':', linewidth=0.8, alpha=0.5)
+            ax.axvline(x=0, color='gray', linestyle=':', linewidth=0.8, alpha=0.5)
     
     def _plot_theta_profile_4d(self, ax, result, original_path: List[Tuple[float, float, float]]):
         """绘制theta随路径变化图（4D模式）"""
@@ -763,3 +750,170 @@ class TrajectoryVisualizer:
             ax.text(0.02, 0.98, f'Range: [{min_norm:.4f}, {max_norm:.4f}]',
                    transform=ax.transAxes, fontsize=12, verticalalignment='top',
                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    
+    def _plot_velocity_profile(self, ax_v_linear, ax_v_angular, ax_v_magnitude, result):
+        """绘制速度可视化（使用EvalDerivative计算理论精确速度）"""
+        # 优先使用trajectory对象计算速度（理论精确值）
+        if result.gcs_trajectory is not None:
+            trajectory = result.gcs_trajectory
+            
+            # 获取实际时间戳
+            if hasattr(result, 'gcs_sample_times') and result.gcs_sample_times is not None:
+                sample_times = result.gcs_sample_times
+            else:
+                sample_times = np.linspace(trajectory.start_time(), trajectory.end_time(), 1000)
+            
+            # 使用EvalDerivative计算速度（理论精确值）
+            print("使用EvalDerivative计算速度...")
+            velocities = np.array([trajectory.EvalDerivative(t, 1).flatten() for t in sample_times]).T
+            
+            vx = velocities[0, :]
+            vy = velocities[1, :]
+            v_speed = np.sqrt(vx**2 + vy**2)
+            
+            # 计算角速度（使用正确的曲率公式）
+            # ω = (vx·ay - vy·ax) / (vx² + vy²)
+            # 这是基于轨迹几何曲率的正确计算方法
+            accelerations = np.array([trajectory.EvalDerivative(t, 2).flatten() for t in sample_times]).T
+            ax_accel = accelerations[0, :]
+            ay_accel = accelerations[1, :]
+
+            omega = (vx * ay_accel - vy * ax_accel) / (vx**2 + vy**2 + 1e-10)
+            
+            # 检查边界速度（验证zero_deriv_boundary效果）
+            start_velocity = trajectory.EvalDerivative(trajectory.start_time(), 1)
+            end_velocity = trajectory.EvalDerivative(trajectory.end_time(), 1)
+            start_speed = np.linalg.norm(start_velocity)
+            end_speed = np.linalg.norm(end_velocity)
+            
+            # 检查边界角速度
+            start_omega = omega[0]
+            end_omega = omega[-1]
+            
+            print(f"\n=== 边界速度检查 ===")
+            print(f"起点速度: [{float(start_velocity[0]):.6f}, {float(start_velocity[1]):.6f}] m/s")
+            print(f"起点速度范数: {start_speed:.8f} m/s")
+            print(f"起点角速度: {start_omega:.8f} rad/s")
+            print(f"终点速度: [{float(end_velocity[0]):.6f}, {float(end_velocity[1]):.6f}] m/s")
+            print(f"终点速度范数: {end_speed:.8f} m/s")
+            print(f"终点角速度: {end_omega:.8f} rad/s")
+            print(f"===================\n")
+            
+            # 使用实际时间作为x轴
+            time_axis = sample_times
+            
+            # 绘制线速度分量
+            ax_v_linear.plot(time_axis, vx, 'b-', linewidth=2, label='vx (X velocity)')
+            ax_v_linear.plot(time_axis, vy, 'r-', linewidth=2, label='vy (Y velocity)')
+            ax_v_linear.set_title('Linear Velocity Components (EvalDerivative)', fontsize=16, fontweight='bold')
+            ax_v_linear.set_xlabel('Time (s)')
+            ax_v_linear.set_ylabel('Velocity (m/s)')
+            ax_v_linear.legend(loc='upper right', fontsize=12, framealpha=0.9)
+            ax_v_linear.grid(True, alpha=0.3)
+            
+            # 绘制角速度
+            ax_v_angular.plot(time_axis, omega, 'g-', linewidth=2, label='ω (Angular velocity)')
+            ax_v_angular.set_title('Angular Velocity (EvalDerivative)', fontsize=16, fontweight='bold')
+            ax_v_angular.set_xlabel('Time (s)')
+            ax_v_angular.set_ylabel('ω (rad/s)')
+            ax_v_angular.legend(loc='upper right', fontsize=12, framealpha=0.9)
+            ax_v_angular.grid(True, alpha=0.3)
+            
+            # 绘制速度（标量，沿运动方向）
+            ax_v_magnitude.plot(time_axis, v_speed, 'm-', linewidth=2, label='v (Speed)')
+            ax_v_magnitude.set_title('Speed (EvalDerivative)', fontsize=16, fontweight='bold')
+            ax_v_magnitude.set_xlabel('Time (s)')
+            ax_v_magnitude.set_ylabel('Speed (m/s)')
+            ax_v_magnitude.legend(loc='upper right', fontsize=12, framealpha=0.9)
+            ax_v_magnitude.grid(True, alpha=0.3)
+            
+            # 添加统计信息
+            max_speed = np.max(v_speed)
+            min_speed = np.min(v_speed)
+            mean_speed = np.mean(v_speed)
+            max_omega = np.max(np.abs(omega))
+            
+            ax_v_magnitude.text(0.02, 0.98,
+                               f'Max Speed: {max_speed:.3f} m/s\nMin Speed: {min_speed:.3f} m/s\nMean Speed: {mean_speed:.3f} m/s\nMax |ω|: {max_omega:.3f} rad/s\n\nStart Speed: {start_speed:.6f} m/s\nEnd Speed: {end_speed:.6f} m/s\nStart ω: {start_omega:.6f} rad/s\nEnd ω: {end_omega:.6f} rad/s',
+                               transform=ax_v_magnitude.transAxes, fontsize=10, verticalalignment='top',
+                               bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        
+        # 回退方案：使用数值差分（如果trajectory不可用）
+        elif result.gcs_waypoints_4d is not None:
+            print("警告：trajectory对象不可用，使用数值差分计算速度（精度较低）")
+            waypoints_4d = result.gcs_waypoints_4d
+            num_points = waypoints_4d.shape[1]
+            
+            # 获取实际时间戳
+            if hasattr(result, 'gcs_sample_times') and result.gcs_sample_times is not None:
+                sample_times = result.gcs_sample_times
+            else:
+                sample_times = np.arange(num_points)
+            
+            # 计算线速度（x, y方向的导数）
+            vx = np.zeros(num_points)
+            vy = np.zeros(num_points)
+            for i in range(1, num_points):
+                dt = sample_times[i] - sample_times[i-1] if len(sample_times) > i else 1.0
+                vx[i] = (waypoints_4d[0, i] - waypoints_4d[0, i-1]) / dt
+                vy[i] = (waypoints_4d[1, i] - waypoints_4d[1, i-1]) / dt
+            
+            # 计算角速度（使用正确的曲率公式）
+            # ω = (vx·ay - vy·ax) / (vx² + vy²)
+            omega = np.zeros(num_points)
+
+            # 计算加速度（数值差分）
+            ax = np.zeros(num_points)
+            ay = np.zeros(num_points)
+            for i in range(1, num_points-1):
+                dt = sample_times[i] - sample_times[i-1] if len(sample_times) > i else 1.0
+                dt_next = sample_times[i+1] - sample_times[i] if len(sample_times) > i+1 else 1.0
+                # 中心差分计算加速度
+                ax[i] = (waypoints_4d[0, i+1] - 2*waypoints_4d[0, i] + waypoints_4d[0, i-1]) / (dt * dt_next)
+                ay[i] = (waypoints_4d[1, i+1] - 2*waypoints_4d[1, i] + waypoints_4d[1, i-1]) / (dt * dt_next)
+
+            # 计算角速度
+            v_squared = vx**2 + vy**2
+            omega = (vx * ay - vy * ax) / (v_squared + 1e-10)
+
+            # 计算速度大小
+            v_speed = np.sqrt(vx**2 + vy**2)
+
+            # 使用实际时间作为x轴
+            time_axis = sample_times[:num_points] if len(sample_times) >= num_points else np.arange(num_points)
+
+            # 绘制线速度分量
+            ax_v_linear.plot(time_axis, vx, 'b-', linewidth=2, label='vx (X velocity)')
+            ax_v_linear.plot(time_axis, vy, 'r-', linewidth=2, label='vy (Y velocity)')
+            ax_v_linear.set_title('Linear Velocity Components (Numerical Difference)', fontsize=16, fontweight='bold')
+            ax_v_linear.set_xlabel('Time (s)')
+            ax_v_linear.set_ylabel('Velocity (m/s)')
+            ax_v_linear.legend(loc='upper right', fontsize=12, framealpha=0.9)
+            ax_v_linear.grid(True, alpha=0.3)
+
+            # 绘制角速度
+            ax_v_angular.plot(time_axis, omega, 'g-', linewidth=2, label='ω (Angular velocity)')
+            ax_v_angular.set_title('Angular Velocity', fontsize=16, fontweight='bold')
+            ax_v_angular.set_xlabel('Time (s)')
+            ax_v_angular.set_ylabel('ω (rad/s)')
+            ax_v_angular.legend(loc='upper right', fontsize=12, framealpha=0.9)
+            ax_v_angular.grid(True, alpha=0.3)
+
+            # 绘制速度（标量，沿运动方向）
+            ax_v_magnitude.plot(time_axis, v_speed, 'm-', linewidth=2, label='v (Speed)')
+            ax_v_magnitude.set_title('Speed (Numerical Difference)', fontsize=16, fontweight='bold')
+            ax_v_magnitude.set_xlabel('Time (s)')
+            ax_v_magnitude.set_ylabel('Speed (m/s)')
+            ax_v_magnitude.legend(loc='upper right', fontsize=12, framealpha=0.9)
+            ax_v_magnitude.grid(True, alpha=0.3)
+
+            # 添加统计信息
+            max_speed = np.max(v_speed)
+            min_speed = np.min(v_speed)
+            mean_speed = np.mean(v_speed)
+            max_omega = np.max(np.abs(omega))
+
+            ax_v_magnitude.text(0.02, 0.98,
+                               f'Max Speed: {max_speed:.3f} m/s\nMin Speed: {min_speed:.3f} m/s\nMean Speed: {mean_speed:.3f} m/s\nMax |ω|: {max_omega:.3f} rad/s',
+                               transform=ax_v_magnitude.transAxes, fontsize=10, verticalalignment='top',
+                               bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))

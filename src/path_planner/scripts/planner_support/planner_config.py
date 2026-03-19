@@ -82,8 +82,8 @@ class PlannerConfig:
     
     # GCS参数
     enable_gcs_optimization: bool = True
-    gcs_order: int = 3
-    gcs_continuity: int = 2
+    gcs_order: int = 4  # 提高到8以获得更平滑的曲线
+    gcs_continuity: int = 2  # 提高到C3以获得更平滑的曲线
     gcs_time_weight: float = 0.1
     gcs_path_length_weight: float = 1.0
     
@@ -107,9 +107,24 @@ class PlannerConfig:
     gcs_cost_preset: str = "lunar_standard"
     
     # 自定义成本权重（当gcs_cost_preset="custom"时使用）
-    gcs_custom_time_weight: float = 1.0
+    gcs_custom_time_weight: float = 0.2
     gcs_custom_path_weight: float = 1.0
-    gcs_custom_energy_weight: float = 0.0
+    gcs_custom_energy_weight: float = 100.0
+    
+    # GCS边界条件配置
+    gcs_zero_velocity_at_boundaries: bool = True  # 是否在起点和终点设置零速度约束（改为False以减少突变）
+    gcs_min_time_derivative: float = 1.0  # 时间轨迹导数的最小值，防止 dh/ds 过小导致速度突变（降低以允许更平滑的过渡）
+    
+    # 贝塞尔曲线重新参数化配置
+    gcs_enable_reparameterization: bool = True  # 是否启用重新参数化
+    gcs_reparameterization_projection_method: str = "radial"  # "radial" 或 "tangent"
+    gcs_reparameterization_check_continuity: bool = True
+    gcs_reparameterization_continuity_order: int = 2
+    gcs_reparameterization_enable_iterative_refinement: bool = True
+    gcs_reparameterization_max_iterations: int = 10
+    gcs_reparameterization_enable_smoothing: bool = True
+    gcs_reparameterization_smoothing_window: int = 5
+    gcs_reparameterization_smoothing_iterations: int = 3
     
     # 可视化
     enable_visualization: bool = True
@@ -241,6 +256,15 @@ class PlannerResult:
     config: PlannerConfig = None
     used_iris: bool = False
     iris_mode_used: str = ""
+    
+    # 4D GCS 结果
+    gcs_regions_4d: Optional[List] = None
+    gcs_waypoints_4d: Optional[np.ndarray] = None
+    
+    # 重新参数化结果
+    reparameterized_trajectory: Optional[Any] = None  # 重新参数化后的轨迹
+    reparameterization_metrics: Optional[Dict] = None  # 重新参数化的性能指标
+    reparameterization_time: float = 0.0  # 重新参数化耗时
     
     # 详细性能指标
     performance_metrics: Optional[PerformanceMetrics] = None
