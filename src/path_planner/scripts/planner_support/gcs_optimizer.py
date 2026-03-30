@@ -70,41 +70,46 @@ class GCSOptimizer:
                 path: List[Tuple[float, float, float]]) -> bool:
         """
         执行GCS轨迹优化（自动选择最佳模式）
-        
-        优先级：4D(单位向量) > 3D(theta) > 2D
-        
+
+        优先级：阿克曼 > 4D(单位向量) > 3D(theta) > 2D
+
         Args:
             result: 规划结果对象
             path: 路径点列表
-            
+
         Returns:
             True如果优化成功
         """
         if not result.iris_np_result:
             return False
-        
+
         # 启动性能监测
         gcs_metrics = self.perf_monitor.start("GCS优化") if self.perf_monitor else None
-        
+
+        # 优先尝试阿克曼模式
+        if self._try_ackermann_mode(result, path):
+            self._end_metrics(gcs_metrics, result, "GCS优化(阿克曼)")
+            return True
+
         # 尝试4D模式（单位向量）
         if self.use_unit_vector:
             if self._try_4d_mode(result, path):
                 self._end_metrics(gcs_metrics, result, "GCS优化(4D-单位向量)")
                 return True
             warnings.warn("4D模式失败，尝试3D模式")
-        
+
         # 尝试3D模式
         if self.use_3d:
             if self._try_3d_mode(result, path):
                 self._end_metrics(gcs_metrics, result, "GCS优化(3D)")
                 return True
             warnings.warn("3D模式失败，尝试2D模式")
-        
+
         # 回退到2D模式
         success = self._try_2d_mode(result, path)
         if success:
             self._end_metrics(gcs_metrics, result, "GCS优化(2D)")
-        
+
         return success
     
     def _try_4d_mode(self, result: PlannerResult,
@@ -241,35 +246,169 @@ class GCSOptimizer:
         """尝试2D模式（仅x, y）"""
         try:
             from pydrake.geometry.optimization import HPolyhedron
-            
+
             print("使用2D GCS模式 (x, y)")
-            
+
             # 向量化提取2D区域
             regions = self._extract_2d_regions_vectorized(result.iris_np_result.regions)
-            
+
             if not regions:
                 return False
-            
+
             # 向量化创建起点和终点
             source = np.array([path[0][0], path[0][1]])
             target = np.array([path[-1][0], path[-1][1]])
-            
+
             # 求解GCS
             trajectory = self._solve_gcs_2d(regions, source, target)
-            
+
             if trajectory is not None:
                 times = np.linspace(trajectory.start_time(), trajectory.end_time(), 100)
                 result.gcs_waypoints = trajectory.vector_values(times)
                 result.gcs_trajectory = trajectory
                 result.used_gcs = True
-                
+
                 self._print_success("GCS优化(2D)", trajectory)
                 return True
-            
+
             return False
-            
+
         except Exception as e:
             warnings.warn(f"2D GCS优化失败: {e}")
+            return False
+
+    def _try_ackermann_mode(self, result: PlannerResult,
+                            path: List[Tuple[float, float, float]]) -> bool:
+        """
+        尝试阿克曼GCS模式
+
+        Args:
+            result: 规划结果对象
+            path: 路径点列表
+
+        Returns:
+            True如果优化成功
+        """
+        try:
+            from gcs_pkg.scripts.core import AckermannGCS
+
+            print("使用阿克曼GCS模式")
+
+            # 提取2D IRIS区域
+            regions = self._extract_2d_regions_vectorized(result.iris_np_result.regions)
+
+            if not regions:
+                return False
+
+            # 获取车辆参数
+            wheelbase = getattr(self.config, 'ackermann_wheelbase', 2.5)
+            order = self.gcs_order
+            continuity = self.gcs_continuity
+
+            # 创建阿克曼GCS优化器
+            gcs = AckermannGCS(
+                regions=regions,
+                wheelbase=wheelbase,
+                order=order,
+                continuity=continuity,
+                hdot_min=self.min_time_derivative
+            )
+
+            # 设置起点和终点（平坦输出 [x, y, theta]）
+            source = np.array([path[0][0], path[0][1], path[0][2]])
+            target = np.array([path[-1][0], path[-1][1], path[-1][2]])
+
+            gcs.addSourceTarget(
+                source, target,
+                zero_velocity_at_boundaries=self.zero_velocity_at_boundaries,
+                min_time_derivative=self.min_time_derivative
+            )
+
+            # 添加速度约束
+            v_min = getattr(self.config, 'ackermann_v_min', 0.0)
+            v_max = getattr(self.config, 'ackermann_v_max', 5.0)
+            gcs.addVelocityLimits(v_min, v_max)
+
+            # 添加转向角约束（使用迭代优化方法）
+            delta_min = getattr(self.config, 'ackermann_delta_min', -np.pi/4)
+            delta_max = getattr(self.config, 'ackermann_delta_max', np.pi/4)
+
+            # 获取迭代优化参数
+            max_iterations = getattr(self.config, 'ackermann_steering_max_iterations', 3)
+            convergence_tolerance = getattr(self.config, 'ackermann_steering_convergence_tolerance', 0.01)
+            verbose = getattr(self.config, 'ackermann_steering_verbose', False)
+
+            print(f"使用迭代优化方法添加转向角约束")
+            print(f"  最大迭代次数: {max_iterations}")
+            print(f"  收敛容忍度: {convergence_tolerance:.2%}")
+
+            iterations_info = gcs.addSteeringLimits_iterative(
+                lower_bound=delta_min,
+                upper_bound=delta_max,
+                max_iterations=max_iterations,
+                convergence_tolerance=convergence_tolerance,
+                verbose=verbose
+            )
+
+            # 打印迭代结果摘要
+            if iterations_info:
+                print(f"\n迭代优化完成，总迭代次数: {len(iterations_info)}")
+                for i, info in enumerate(iterations_info):
+                    if info.get('success'):
+                        steering = info.get('steering_analysis', {})
+                        print(f"  迭代 {i+1}: 成功")
+                        print(f"    轨迹时间: {info.get('trajectory_time', 0):.2f}s")
+                        print(f"    转向角范围: {np.degrees(steering.get('delta_min', 0)):.2f}° ~ {np.degrees(steering.get('delta_max', 0)):.2f}°")
+                        print(f"    违反约束: {steering.get('violations', 0)} 次")
+                        if steering.get('max_violation', 0) > 0:
+                            print(f"    最大违反量: {np.degrees(steering.get('max_violation', 0)):.2f}°")
+                    else:
+                        print(f"  迭代 {i+1}: 失败 - {info.get('error', 'Unknown error')}")
+
+            # 添加最小转弯半径约束
+            r_min = getattr(self.config, 'ackermann_r_min', None)
+            if r_min is not None:
+                gcs.addMinTurningRadiusConstraint(r_min)
+
+            # 添加成本函数
+            gcs.addTimeCost(weight=self.time_weight)
+            gcs.addPathLengthCost(weight=self.path_weight)
+            # 暂时不添加平滑性成本，可能导致数值不稳定
+            # gcs.addSmoothnessCost(weight=getattr(self.config, 'gcs_smoothness_weight', 1.0))
+
+            # 求解
+            trajectory, results_dict = gcs.SolvePath(
+                rounding=True,
+                verbose=False,
+                preprocessing=True
+            )
+
+            if trajectory is not None:
+                # 保存结果
+                result.gcs_trajectory = trajectory
+                result.used_gcs = True
+                result.gcs_mode = 'ackermann'
+
+                # 采样轨迹点
+                num_samples = 1000
+                sample_times = np.linspace(trajectory.start_time(), trajectory.end_time(), num_samples)
+                waypoints = np.zeros((5, num_samples))
+
+                for i, t in enumerate(sample_times):
+                    waypoints[:, i] = trajectory.get_state(t)
+
+                result.gcs_waypoints = waypoints
+                result.gcs_sample_times = sample_times
+
+                self._print_success("GCS优化(阿克曼)", trajectory)
+                return True
+
+            return False
+
+        except Exception as e:
+            warnings.warn(f"阿克曼GCS优化失败: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
     def _solve_gcs_4d(self, regions, source: np.ndarray, target: np.ndarray):

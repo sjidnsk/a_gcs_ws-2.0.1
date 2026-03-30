@@ -236,15 +236,22 @@ def run_test(scenario: str = 'basic',
     config = PlannerConfig(
         use_iris=True,
         corridor_width=corridor_width,
-        
+
         # GCS策略和成本预设
         gcs_strategy_preset=gcs_strategy,
         gcs_cost_preset=gcs_cost,
-        
+
         # 可视化
         enable_visualization=True,
         save_visualization=True,
-        output_dir="./output"
+        output_dir="./output",
+
+        # 阿克曼车辆参数
+        ackermann_wheelbase=2.5,
+        ackermann_v_min=0.0,
+        ackermann_v_max=5.0,
+        ackermann_delta_min=-np.pi/4,
+        ackermann_delta_max=np.pi/4,
     )
     
     planner = HybridAStarGCSPlanner(c_space, config)
@@ -253,6 +260,7 @@ def run_test(scenario: str = 'basic',
     # 打印结果
     print(f"\n结果: 区域数={result.num_obstacles}, 面积={result.obstacle_area:.2f}m², 时间={result.total_time:.2f}s")
     print(f"IRIS模式: {result.iris_mode_used}")
+    print(f"GCS模式: {result.gcs_mode}")
     print(f"GCS策略: {gcs_strategy}, GCS成本: {gcs_cost}")
 
 

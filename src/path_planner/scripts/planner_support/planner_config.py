@@ -125,7 +125,15 @@ class PlannerConfig:
     gcs_reparameterization_enable_smoothing: bool = True
     gcs_reparameterization_smoothing_window: int = 5
     gcs_reparameterization_smoothing_iterations: int = 3
-    
+
+    # 阿克曼车辆参数
+    ackermann_wheelbase: float = 2.5  # 轴距（米）
+    ackermann_v_min: float = 0.0      # 最小速度（米/秒）
+    ackermann_v_max: float = 5.0      # 最大速度（米/秒）
+    ackermann_delta_min: float = -np.pi/4  # 最小转向角（弧度）
+    ackermann_delta_max: float = np.pi/4   # 最大转向角（弧度）
+    ackermann_r_min: Optional[float] = None  # 最小转弯半径（米）
+
     # 可视化
     enable_visualization: bool = True
     save_visualization: bool = False
@@ -244,6 +252,8 @@ class PlannerResult:
     iris_np_result: Optional[Any] = None  # IRIS np模式结果
     gcs_trajectory: Optional[Any] = None
     gcs_waypoints: Optional[np.ndarray] = None
+    gcs_sample_times: Optional[np.ndarray] = None  # 采样时间点
+    gcs_mode: str = ""  # GCS模式：'ackermann', '4d', '3d', '2d'
     gcs_solve_time: float = 0.0
     used_gcs: bool = False
     num_obstacles: int = 0

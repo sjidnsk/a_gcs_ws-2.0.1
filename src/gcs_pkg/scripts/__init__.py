@@ -28,6 +28,8 @@ from .core import (
     LinearGCS,
     BezierGCS,
     BezierTrajectory,
+    AckermannGCS,
+    AckermannTrajectory,
     polytopeDimension,
     convexSetDimension,
     intersectionDimension,
@@ -83,6 +85,8 @@ __all__ = [
     'LinearGCS',
     'BezierGCS',
     'BezierTrajectory',
+    'AckermannGCS',
+    'AckermannTrajectory',
     # 维度计算函数
     'polytopeDimension',
     'convexSetDimension',
