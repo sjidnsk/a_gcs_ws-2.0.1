@@ -32,12 +32,13 @@ from tests.unit.test_hybrid_astar_gcs_planner import create_test_map
 from tests.unit.hybrid_astar_gcs_planner import (
     SCENARIO_CONFIGS, 
     convert_iris_to_hpolyhedron, create_endpoint_state,
-    DEFAULT_VEHICLE_PARAMS
+    DEFAULT_VEHICLE_PARAMS,
+    plan_path
 )
 from C_space_pkg.se2 import SE2ConfigurationSpace
 from hybrid_astar_gcs_planner import HybridAStarGCSPlanner
-from planner_support import PlannerConfig
-from tests.unit.test_hybrid_astar_gcs_planner import plan_path
+from path_planner.scripts.planner_support import PlannerConfig
+# from tests.unit.test_hybrid_astar_gcs_planner import plan_path
 from ackermann_gcs_pkg.ackermann_gcs_planner import AckermannGCSPlanner
 from ackermann_gcs_pkg.ackermann_data_structures import BezierConfig, SCPConfig
 from ackermann_gcs_pkg.flat_output_mapper import compute_flat_output_mapping
