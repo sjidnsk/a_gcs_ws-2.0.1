@@ -22,6 +22,7 @@ from pydrake.solvers import(
     LinearConstraint,          # 线性约束
     LinearCost,                # 线性成本
     LinearEqualityConstraint,  # 线性等式约束
+    LorentzConeConstraint,     # Lorentz锥约束（用于标量速度约束）
     QuadraticCost,             # 二次成本
     PerspectiveQuadraticCost,  # 透视二次成本
 )
@@ -438,6 +439,92 @@ class BezierGCS(BaseGCS):
                 A_constraint, -np.inf*np.ones(2*self.dimension), np.zeros(2*self.dimension))
             self.deriv_constraints.append(velocity_con)
 
+            for edge in self.gcs.Edges():
+                if edge.u() == self.source:
+                    continue
+                edge.AddConstraint(Binding[Constraint](velocity_con, edge.xu()))
+
+    def addScalarVelocityLimit(self, max_velocity: float):
+        """
+        添加标量速度限制：||v||_2 <= max_velocity
+        
+        使用二阶锥约束（SOCP）实现，更符合阿克曼车辆的物理模型。
+        
+        数学推导：
+            速度定义：v = dr/dt = r'(s) / h'(s)
+            标量约束：||v||_2 <= v_max
+            转化形式：||r'(s)||_2 <= v_max * h'(s)
+            SOCP形式：||A_ctrl||_2 <= v_max * b_ctrl
+            
+        Lorentz锥约束：
+            z = H @ x, 其中 H = [v_max * b_ctrl; A_ctrl]
+            约束：z[0] >= ||z[1:]||_2
+        
+        Args:
+            max_velocity: 标量速度上限（m/s），必须为正数
+        
+        Raises:
+            AssertionError: 如果 max_velocity <= 0
+        
+        Note:
+            - 此约束是凸约束，保持优化问题的凸性
+            - 需要时间缩放约束保证 h'(s) > 0
+            - 比矢量约束更准确，但求解时间略长（通常<10%）
+            - 适用于阿克曼转向车辆的速度限制
+        
+        Example:
+            >>> bezier_gcs = BezierGCS(regions, order=5, continuity=2)
+            >>> bezier_gcs.addScalarVelocityLimit(2.0)  # 限制速度不超过2 m/s
+        """
+        # 参数验证
+        assert max_velocity > 0, f"max_velocity must be positive, got {max_velocity}"
+        
+        # 获取空间轨迹和时间轨迹的一阶导数控制点
+        # r'(s): 空间轨迹对参数s的导数
+        # h'(s): 时间轨迹对参数s的导数
+        u_path_control = self.u_r_trajectory.MakeDerivative(1).control_points()
+        u_time_control = self.u_h_trajectory.MakeDerivative(1).control_points()
+        
+        # 对每个控制点添加Lorentz锥约束
+        for ii in range(len(u_path_control)):
+            # 将空间导数和时间导数表达式分解为线性系数
+            # A_ctrl: 空间导数的系数矩阵，形状 (dimension, num_vars)
+            #         表示 r'(s) = A_ctrl @ x
+            # b_ctrl: 时间导数的系数矩阵，形状 (1, num_vars)
+            #         表示 h'(s) = b_ctrl @ x
+            A_ctrl = DecomposeLinearExpressions(u_path_control[ii], self.u_vars)
+            b_ctrl = DecomposeLinearExpressions(u_time_control[ii], self.u_vars)
+            
+            # 构建Lorentz锥约束矩阵
+            # 约束形式：||r'(s)||_2 <= v_max * h'(s)
+            # 即：||A_ctrl @ x||_2 <= v_max * (b_ctrl @ x)
+            # 转化为Lorentz锥形式：
+            #   z = H @ x, 其中 H = [v_max * b_ctrl; A_ctrl]
+            #   约束：z[0] >= ||z[1:]||_2
+            # 
+            # H的形状：(dimension + 1, num_vars)
+            # H[0, :] = v_max * b_ctrl  (时间导数系数，乘以速度上限)
+            # H[1:, :] = A_ctrl         (空间导数系数)
+            H = np.vstack([
+                max_velocity * b_ctrl,  # 第一行：时间导数系数
+                A_ctrl                   # 后续行：空间导数系数
+            ])
+            
+            # 创建Lorentz锥约束
+            # Drake的LorentzConeConstraint定义：
+            #   x ∈ LorentzCone <=> x[0] >= sqrt(x[1]^2 + ... + x[n]^2)
+            # 即：x[0] >= ||x[1:]||_2
+            # 
+            # 构造函数：LorentzConeConstraint(A, b)
+            # 约束：A @ x + b ∈ LorentzCone
+            # 即：(A @ x + b)[0] >= ||(A @ x + b)[1:]||_2
+            velocity_con = LorentzConeConstraint(H, np.zeros(H.shape[0]))
+            
+            # 存储约束对象（用于调试和可视化）
+            self.deriv_constraints.append(velocity_con)
+            
+            # 对所有GCS边添加约束
+            # 注意：跳过源点边（edge.u() == self.source），因为源点没有前驱
             for edge in self.gcs.Edges():
                 if edge.u() == self.source:
                     continue

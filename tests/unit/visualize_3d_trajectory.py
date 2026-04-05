@@ -28,8 +28,9 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from typing import Optional, List, Tuple
 
-from tests.unit.test_hybrid_astar_gcs_planner import (
-    create_test_map, SCENARIO_CONFIGS, 
+from tests.unit.test_hybrid_astar_gcs_planner import create_test_map
+from tests.unit.hybrid_astar_gcs_planner import (
+    SCENARIO_CONFIGS, 
     convert_iris_to_hpolyhedron, create_endpoint_state,
     DEFAULT_VEHICLE_PARAMS
 )

@@ -730,6 +730,117 @@ class CurvatureCostWeights:
 
 
 @dataclass
+class LinearizedCostCoefficients:
+    """
+    线性化成本系数
+
+    用于SCP迭代中曲率成本的线性化近似，包含泰勒展开的各阶系数
+
+    泰勒展开形式: J ≈ J₀ + gᵀΔP + 0.5 * ΔPᵀHΔP
+
+    Attributes:
+        gradient: 梯度向量 g，形状为(n*2,)，n为控制点数量
+        hessian_diag: Hessian对角近似，形状为(n*2,)，用于保证正定性
+        constant: 常数项 J₀，当前轨迹的成本值
+    """
+    gradient: np.ndarray
+    hessian_diag: np.ndarray
+    constant: float
+
+    def __post_init__(self):
+        """参数验证"""
+        if not isinstance(self.gradient, np.ndarray):
+            raise ValueError(f"gradient must be a numpy array, got {type(self.gradient)}")
+        if not isinstance(self.hessian_diag, np.ndarray):
+            raise ValueError(f"hessian_diag must be a numpy array, got {type(self.hessian_diag)}")
+        if self.gradient.shape != self.hessian_diag.shape:
+            raise ValueError(
+                f"gradient and hessian_diag must have the same shape, "
+                f"got gradient.shape={self.gradient.shape}, hessian_diag.shape={self.hessian_diag.shape}"
+            )
+        if len(self.gradient.shape) != 1:
+            raise ValueError(f"gradient must be 1D array, got shape {self.gradient.shape}")
+        # 验证Hessian对角正定性（所有元素应为正）
+        if np.any(self.hessian_diag <= 0):
+            raise ValueError("hessian_diag must be positive definite (all elements > 0)")
+
+    def todict(self) -> Dict:
+        """转换为字典"""
+        return {
+            'gradient': self.gradient.tolist(),
+            'hessian_diag': self.hessian_diag.tolist(),
+            'constant': self.constant,
+        }
+
+    @classmethod
+    def fromdict(cls, data: Dict) -> 'LinearizedCostCoefficients':
+        """从字典创建实例"""
+        return cls(
+            gradient=np.array(data['gradient']),
+            hessian_diag=np.array(data['hessian_diag']),
+            constant=data['constant'],
+        )
+
+
+@dataclass
+class CurvatureDerivatives:
+    """
+    曲率及各阶导数
+
+    存储曲率计算过程中的中间结果，用于解析梯度计算和缓存复用
+
+    Attributes:
+        curvature: 曲率 κ = (ẋÿ - ẏẍ) / (ẋ² + ẏ²)^(3/2)
+        curvature_derivative: 曲率导数 dκ/ds = (dκ/dt) / ||r'(s)||
+        first_deriv: 一阶导数 r'(s) = [ẋ, ẏ]，形状为(2,)
+        second_deriv: 二阶导数 r''(s) = [ẍ, ÿ]，形状为(2,)
+        third_deriv: 三阶导数 r'''(s) = [x''', y''']，形状为(2,)
+        speed: 速度 ||r'(s)|| = sqrt(ẋ² + ẏ²)
+    """
+    curvature: float
+    curvature_derivative: float
+    first_deriv: np.ndarray
+    second_deriv: np.ndarray
+    third_deriv: np.ndarray
+    speed: float = 0.0
+
+    def __post_init__(self):
+        """参数验证"""
+        if not isinstance(self.first_deriv, np.ndarray) or self.first_deriv.shape != (2,):
+            raise ValueError(f"first_deriv must be a (2,) numpy array, got shape {self.first_deriv.shape}")
+        if not isinstance(self.second_deriv, np.ndarray) or self.second_deriv.shape != (2,):
+            raise ValueError(f"second_deriv must be a (2,) numpy array, got shape {self.second_deriv.shape}")
+        if not isinstance(self.third_deriv, np.ndarray) or self.third_deriv.shape != (2,):
+            raise ValueError(f"third_deriv must be a (2,) numpy array, got shape {self.third_deriv.shape}")
+        # 如果speed未提供，自动计算
+        if self.speed == 0.0:
+            self.speed = np.linalg.norm(self.first_deriv)
+
+    def todict(self) -> Dict:
+        """转换为字典"""
+        return {
+            'curvature': self.curvature,
+            'curvature_derivative': self.curvature_derivative,
+            'first_deriv': self.first_deriv.tolist(),
+            'second_deriv': self.second_deriv.tolist(),
+            'third_deriv': self.third_deriv.tolist(),
+            'speed': self.speed,
+        }
+
+    @classmethod
+    def fromdict(cls, data: Dict) -> 'CurvatureDerivatives':
+        """从字典创建实例"""
+        return cls(
+            curvature=data['curvature'],
+            curvature_derivative=data['curvature_derivative'],
+            first_deriv=np.array(data['first_deriv']),
+            second_deriv=np.array(data['second_deriv']),
+            third_deriv=np.array(data['third_deriv']),
+            speed=data.get('speed', 0.0),
+        )
+
+
+@dataclass
 class CurvatureStats:
     """
     曲率统计信息

@@ -158,9 +158,10 @@ class AckermannGCSPlanner:
             print("=" * 70)
 
         # 使用标量速度约束（SOCP）
-        # 更符合阿克曼车辆的物理模型，约束形式：||v||_2 <= max_velocity
+        # 约束形式：||v||_2 <= max_velocity
+        # 更符合阿克曼车辆的物理模型
         bezier_gcs.addScalarVelocityLimit(constraints.max_velocity)
-
+        
         # 原有矢量约束（已弃用，保留作为参考）
         # bezier_gcs.addVelocityLimits(np.zeros(2), np.full(2, constraints.max_velocity))
 

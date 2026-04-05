@@ -7,6 +7,8 @@
 - 曲率峰值惩罚成本
 - 凸松弛方法
 - 高精度数值积分
+- SCP线性化支持
+- 解析梯度计算
 """
 
 import numpy as np
@@ -15,8 +17,15 @@ from scipy.special import roots_legendre
 
 from .ackermann_data_structures import (
     CurvatureCostConfig,
-    CurvatureCostWeights
+    CurvatureCostWeights,
+    LinearizedCostCoefficients,
 )
+
+# 导入新模块
+from .curvature_cost_linearizer import CurvatureCostLinearizer
+from .curvature_derivative_cost import CurvatureDerivativeCost
+from .curvature_peak_cost import CurvaturePeakCost
+from .analytic_gradient_calculator import AnalyticGradientCalculator
 
 
 class CurvatureCostModule:
@@ -37,6 +46,12 @@ class CurvatureCostModule:
         self.sampling_points = None
         self.weights = None
         self._init_integration_points()
+
+        # 初始化新模块
+        self.linearizer = CurvatureCostLinearizer(config)
+        self.derivative_cost = CurvatureDerivativeCost(config)
+        self.peak_cost = CurvaturePeakCost(config)
+        self.gradient_calculator = AnalyticGradientCalculator(config)
 
     def _init_integration_points(self):
         """
@@ -317,13 +332,23 @@ class CurvatureCostModule:
 
         # 添加曲率导数平方积分成本
         if weights.curvature_derivative > 0:
-            if verbose:
-                print("  [Info] Curvature derivative cost not yet implemented in GCS.")
+            success = self.add_curvature_derivative_cost_to_gcs(
+                bezier_gcs,
+                weights.curvature_derivative,
+                verbose
+            )
+            if not success and verbose:
+                print("  [Warning] Failed to add curvature derivative cost.")
 
         # 添加曲率峰值惩罚成本
         if weights.curvature_peak > 0:
-            if verbose:
-                print("  [Info] Curvature peak cost not yet implemented in GCS.")
+            success = self.add_curvature_peak_cost_to_gcs(
+                bezier_gcs,
+                weights.curvature_peak,
+                verbose=verbose
+            )
+            if not success and verbose:
+                print("  [Warning] Failed to add curvature peak cost.")
 
     def _add_convex_relaxed_curvature_cost(
         self,
@@ -435,3 +460,121 @@ class CurvatureCostModule:
                 gradient[i, j] = (cost_plus - cost_current) / epsilon
 
         return gradient
+
+    # ==================== 新增方法：SCP线性化支持 ====================
+
+    def linearize_curvature_cost(
+        self,
+        control_points: np.ndarray,
+        weights: CurvatureCostWeights
+    ) -> LinearizedCostCoefficients:
+        """
+        线性化曲率成本（供SCP调用）
+
+        对曲率平方积分成本进行泰勒展开线性化：
+        J ≈ J₀ + gᵀΔP + 0.5 * ΔPᵀHΔP
+
+        Args:
+            control_points: 当前控制点，形状(n, 2)
+            weights: 成本权重配置
+
+        Returns:
+            LinearizedCostCoefficients: 线性化系数
+        """
+        if weights.curvature_squared <= 0:
+            # 返回零系数
+            n = len(control_points)
+            return LinearizedCostCoefficients(
+                gradient=np.zeros(n * 2),
+                hessian_diag=np.ones(n * 2) * 1e-6,
+                constant=0.0
+            )
+
+        return self.linearizer.get_linearized_cost_coeffs(
+            control_points,
+            weight=weights.curvature_squared
+        )
+
+    def compute_analytic_gradient(
+        self,
+        control_points: np.ndarray,
+        weights: CurvatureCostWeights
+    ) -> np.ndarray:
+        """
+        计算解析梯度（替代数值差分）
+
+        使用解析公式计算成本对控制点的梯度，效率比数值差分高10倍以上
+
+        Args:
+            control_points: 贝塞尔曲线控制点，形状(n, 2)
+            weights: 成本权重配置
+
+        Returns:
+            梯度 ∂J/∂P，形状(n, 2)
+        """
+        return self.gradient_calculator.compute_gradient_2d(control_points, weights)
+
+    def add_curvature_derivative_cost_to_gcs(
+        self,
+        bezier_gcs,
+        weight: float,
+        verbose: bool = True
+    ) -> bool:
+        """
+        将曲率导数成本添加到GCS
+
+        使用代理成本: J = ∫||r'''(s)||² ds
+
+        Args:
+            bezier_gcs: BezierGCS对象
+            weight: 成本权重
+            verbose: 是否输出调试信息
+
+        Returns:
+            是否成功添加
+        """
+        return self.derivative_cost.add_to_gcs(bezier_gcs, weight, verbose)
+
+    def add_curvature_peak_cost_to_gcs(
+        self,
+        bezier_gcs,
+        weight: float,
+        control_points: Optional[np.ndarray] = None,
+        verbose: bool = True
+    ) -> bool:
+        """
+        将曲率峰值成本添加到GCS
+
+        使用松弛方法: min κ_max s.t. |κ(s_i)| ≤ κ_max
+
+        Args:
+            bezier_gcs: BezierGCS对象
+            weight: 成本权重
+            control_points: 当前控制点（用于线性化）
+            verbose: 是否输出调试信息
+
+        Returns:
+            是否成功添加
+        """
+        return self.peak_cost.add_to_gcs(bezier_gcs, weight, control_points, verbose)
+
+    def compute_curvature_and_derivatives(
+        self,
+        control_points: np.ndarray,
+        s: float
+    ):
+        """
+        计算曲率及各阶导数
+
+        Args:
+            control_points: 控制点数组，形状(n, 2)
+            s: 参数值，范围[0, 1]
+
+        Returns:
+            CurvatureDerivatives: 曲率及各阶导数
+        """
+        return self.linearizer.compute_curvature_and_derivatives(control_points, s)
+
+    def clear_gradient_cache(self) -> None:
+        """清除梯度计算缓存"""
+        self.gradient_calculator.clear_cache()

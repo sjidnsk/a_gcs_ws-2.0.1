@@ -5,7 +5,7 @@
 """
 
 from typing import List
-from ackermann_data_structures import (
+from ackermann_gcs_pkg.ackermann_data_structures import (
     TrustRegionConfig,
     ImprovementRecord
 )

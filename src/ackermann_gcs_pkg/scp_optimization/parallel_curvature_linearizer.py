@@ -13,7 +13,7 @@ from pydrake.solvers import LinearConstraint
 from pydrake.symbolic import DecomposeLinearExpressions
 from pydrake.trajectories import BsplineTrajectory
 
-from ackermann_data_structures import (
+from ackermann_gcs_pkg.ackermann_data_structures import (
     ParallelConfig,
     VehicleParams
 )
