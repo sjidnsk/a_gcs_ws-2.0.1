@@ -48,7 +48,7 @@ from visualization import VisualizationOutputManager
 
 # 导入控制点相关模块
 from visualization.ackermann.control_point_extractor import extract_control_points
-from visualization.ackermann.config import ControlPointConfig
+from config.visualization import ControlPointConfig
 
 
 def visualize_3d_trajectory_interactive(
