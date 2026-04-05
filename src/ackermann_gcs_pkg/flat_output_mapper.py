@@ -1,0 +1,211 @@
+"""
+平坦输出映射器
+
+本模块实现了阿克曼转向车辆的平坦输出映射，将位置轨迹（x, y）映射到车辆状态空间。
+"""
+
+import numpy as np
+from typing import Dict, Optional
+from pydrake.trajectories import BsplineTrajectory
+from scipy.optimize import root_scalar
+
+from .ackermann_data_structures import VehicleParams
+
+
+class FlatOutputMapper:
+    """
+    平坦输出映射器
+
+    将平坦输出（位置轨迹）映射到车辆状态空间，包括：
+    - 速度
+    - 航向角
+    - 曲率
+    - 转向角
+    - 加速度
+    """
+
+    @staticmethod
+    def compute_velocity(x_dot: np.ndarray, y_dot: np.ndarray) -> np.ndarray:
+        """
+        计算速度
+
+        v = sqrt(x_dot^2 + y_dot^2)
+
+        Args:
+            x_dot: x方向速度，形状为(N,)
+            y_dot: y方向速度，形状为(N,)
+
+        Returns:
+            速度，形状为(N,)
+        """
+        return np.sqrt(x_dot**2 + y_dot**2)
+
+    @staticmethod
+    def compute_heading(x_dot: np.ndarray, y_dot: np.ndarray) -> np.ndarray:
+        """
+        计算航向角
+
+        theta = arctan2(y_dot, x_dot)
+
+        Args:
+            x_dot: x方向速度，形状为(N,)
+            y_dot: y方向速度，形状为(N,)
+
+        Returns:
+            航向角，形状为(N,)，范围[-π, π]
+        """
+        return np.arctan2(y_dot, x_dot)
+
+    @staticmethod
+    def compute_curvature(
+        x_dot: np.ndarray,
+        y_dot: np.ndarray,
+        x_ddot: np.ndarray,
+        y_ddot: np.ndarray,
+        epsilon: float = 1e-10,
+    ) -> np.ndarray:
+        """
+        计算曲率
+
+        κ = (x_dot * y_ddot - y_dot * x_ddot) / (x_dot^2 + y_dot^2)^(3/2)
+
+        Args:
+            x_dot: x方向速度，形状为(N,)
+            y_dot: y方向速度，形状为(N,)
+            x_ddot: x方向加速度，形状为(N,)
+            y_ddot: y方向加速度，形状为(N,)
+            epsilon: 防止除零的小量
+
+        Returns:
+            曲率，形状为(N,)
+        """
+        denominator = (x_dot**2 + y_dot**2) ** 1.5
+        # 除零保护
+        denominator = np.where(denominator < epsilon, 1.0, denominator)
+        numerator = x_dot * y_ddot - y_dot * x_ddot
+        return numerator / denominator
+
+    @staticmethod
+    def compute_steering_angle(curvature: np.ndarray, wheelbase: float) -> np.ndarray:
+        """
+        计算转向角
+
+        δ = arctan(L * κ)
+
+        Args:
+            curvature: 曲率，形状为(N,)
+            wheelbase: 车辆轴距（米）
+
+        Returns:
+            转向角，形状为(N,)
+        """
+        return np.arctan(wheelbase * curvature)
+
+    @staticmethod
+    def compute_acceleration(
+        x_dot: np.ndarray,
+        y_dot: np.ndarray,
+        x_ddot: np.ndarray,
+        y_ddot: np.ndarray,
+        epsilon: float = 1e-10,
+    ) -> np.ndarray:
+        """
+        计算加速度
+
+        a = (x_dot * x_ddot + y_dot * y_ddot) / sqrt(x_dot^2 + y_dot^2)
+
+        Args:
+            x_dot: x方向速度，形状为(N,)
+            y_dot: y方向速度，形状为(N,)
+            x_ddot: x方向加速度，形状为(N,)
+            y_ddot: y方向加速度，形状为(N,)
+            epsilon: 防止除零的小量
+
+        Returns:
+            加速度，形状为(N,)
+        """
+        velocity = np.sqrt(x_dot**2 + y_dot**2)
+        # 速度保护
+        velocity = np.where(velocity < epsilon, 1.0, velocity)
+        numerator = x_dot * x_ddot + y_dot * y_ddot
+        return numerator / velocity
+
+
+def compute_flat_output_mapping(
+    trajectory: BsplineTrajectory,
+    vehicle_params: VehicleParams,
+    num_samples: int = 100,
+) -> Dict[str, np.ndarray]:
+    """
+    计算平坦输出映射
+
+    将贝塞尔轨迹映射到车辆状态空间，返回位置、速度、航向角、曲率、转向角、加速度。
+
+    Args:
+        trajectory: 贝塞尔轨迹对象（BsplineTrajectory）
+        vehicle_params: 车辆参数（VehicleParams）
+        num_samples: 采样点数，默认为100
+
+    Returns:
+        字典，包含以下键：
+        - position: 位置轨迹，形状为(2, N)
+        - velocity: 速度轨迹，形状为(N,)
+        - heading: 航向角轨迹，形状为(N,)
+        - curvature: 曲率轨迹，形状为(N,)
+        - steering_angle: 转向角轨迹，形状为(N,)
+        - acceleration: 加速度轨迹，形状为(N,)
+    """
+    # 采样时间点
+    t_samples = np.linspace(trajectory.start_time(), trajectory.end_time(), num_samples)
+
+    # 计算位置、速度、航向角、曲率、转向角、加速度
+    position_list = []
+    velocity_list = []
+    heading_list = []
+    curvature_list = []
+    steering_angle_list = []
+    acceleration_list = []
+
+    for t in t_samples:
+        # 计算位置
+        position = trajectory.value(t)
+        position_list.append(position)
+
+        # 计算一阶导数（速度）
+        velocity_derivative = trajectory.EvalDerivative(t, 1)
+        x_dot = velocity_derivative[0]
+        y_dot = velocity_derivative[1]
+
+        # 计算二阶导数（加速度）
+        acceleration_derivative = trajectory.EvalDerivative(t, 2)
+        x_ddot = acceleration_derivative[0]
+        y_ddot = acceleration_derivative[1]
+
+        # 计算速度
+        velocity = FlatOutputMapper.compute_velocity(x_dot, y_dot)
+        velocity_list.append(velocity)
+
+        # 计算航向角
+        heading = FlatOutputMapper.compute_heading(x_dot, y_dot)
+        heading_list.append(heading)
+
+        # 计算曲率
+        curvature = FlatOutputMapper.compute_curvature(x_dot, y_dot, x_ddot, y_ddot)
+        curvature_list.append(curvature)
+
+        # 计算转向角
+        steering_angle = FlatOutputMapper.compute_steering_angle(curvature, vehicle_params.wheelbase)
+        steering_angle_list.append(steering_angle)
+
+        # 计算加速度
+        acceleration = FlatOutputMapper.compute_acceleration(x_dot, y_dot, x_ddot, y_ddot)
+        acceleration_list.append(acceleration)
+
+    return {
+        "position": np.hstack(position_list),  # (2, 100)
+        "velocity": np.array(velocity_list),
+        "heading": np.array(heading_list),
+        "curvature": np.array(curvature_list),
+        "steering_angle": np.array(steering_angle_list),
+        "acceleration": np.array(acceleration_list),
+    }
