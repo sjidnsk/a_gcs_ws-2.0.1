@@ -46,7 +46,7 @@ from .rounding import (
 )
 
 # 导入求解器配置
-from .solver import (
+from config.solver import (
     ProblemSize,
     SolverType,
     SolverPerformanceProfile,
@@ -58,7 +58,7 @@ from .solver import (
 )
 
 # 导入配置模块
-from .config import (
+from config.gcs import (
     OptimizationPriority,
     CostWeights,
     CostConfigurator,

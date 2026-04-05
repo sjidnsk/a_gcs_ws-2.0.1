@@ -9,7 +9,7 @@ A*与GCS分层轨迹规划支持模块
 """
 
 from .performance_monitor import PerformanceMetrics, PerformanceMonitor
-from .planner_config import (
+from config.planner import (
     PlannerConfig,
     PlannerResult
 )

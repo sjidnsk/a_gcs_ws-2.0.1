@@ -1,11 +1,10 @@
 """
-求解器配置模块（向后兼容接口）
+求解器配置模块
 
-注意：配置文件已移动到 config/solver/ 目录
-此文件仅提供向后兼容的导入接口
+提供求解器相关的所有配置类和工具函数。
 """
 
-from config.solver import (
+from .solver_config import (
     ProblemSize,
     SolverType,
     SolverPerformanceProfile,

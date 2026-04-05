@@ -4,7 +4,7 @@
 提供可视化基类和配置管理
 """
 
-from .config import PlotConfig, VisualizationConfig
+from config.visualization import PlotConfig, VisualizationConfig
 from .base_visualizer import BaseVisualizer
 from .output_manager import VisualizationOutputManager
 from .models import OutputConfig, OutputFileInfo, RunInstanceInfo

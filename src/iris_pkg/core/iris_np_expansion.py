@@ -11,7 +11,7 @@ import warnings
 from typing import List, Tuple, Optional
 from pydrake.geometry.optimization import HPolyhedron
 
-from ..config.iris_np_config import IrisNpConfig
+from config.iris import IrisNpConfig
 from .iris_np_region_data import IrisNpRegion
 from .iris_np_collision import SimpleCollisionCheckerForIrisNp
 from .iris_np_utils import (

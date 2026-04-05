@@ -20,7 +20,7 @@ import numpy as np
 from typing import List, Tuple, Optional, Any
 from functools import lru_cache
 
-from .planner_config import PlannerResult
+from config.planner import PlannerResult
 
 
 class GCSOptimizer:

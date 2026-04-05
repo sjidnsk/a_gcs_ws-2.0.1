@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from typing import Optional
 
-from .config import VisualizationConfig, ControlPointConfig, ControlPointData
+from config.visualization import VisualizationConfig, ControlPointConfig, ControlPointData
 from .trajectory_sampler import TrajectoryData
 from ackermann_gcs_pkg.ackermann_data_structures import EndpointState
 

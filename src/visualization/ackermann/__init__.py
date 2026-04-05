@@ -8,7 +8,7 @@ AckermannGCS可视化模块
 - 综合可视化布局
 """
 
-from .config import VisualizationConfig
+from config.visualization import VisualizationConfig
 from .trajectory_sampler import TrajectorySampler, TrajectoryData
 from .region_renderer import RegionRenderer
 from .path_comparator import PathComparator

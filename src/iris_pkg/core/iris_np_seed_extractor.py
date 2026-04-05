@@ -12,7 +12,7 @@ import numpy as np
 from typing import List, Tuple, Optional, Dict, Any
 from scipy.spatial import KDTree
 
-from ..config.iris_np_config import IrisNpConfig
+from config.iris import IrisNpConfig
 from .iris_np_region_data import IrisNpRegion
 
 

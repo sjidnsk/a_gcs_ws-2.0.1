@@ -1,20 +1,22 @@
 """
-GCS配置模块（向后兼容接口）
+GCS配置模块
 
-注意：配置文件已移动到 config/gcs/ 目录
-此文件仅提供向后兼容的导入接口
+提供GCS相关的所有配置类和工具函数。
 """
 
-from config.gcs import (
-    OptimizationPriority,
-    CostWeights,
+from .cost_configurator import (
     CostConfigurator,
+    CostWeights,
     CostOptimizer,
-    LunarRoverGCSConfig,
+    OptimizationPriority,
     get_lunar_standard_config,
     get_lunar_high_risk_config,
     get_lunar_emergency_config,
     get_lunar_complex_config,
+)
+
+from .lunar_rover_config import (
+    LunarRoverGCSConfig,
     get_standard_lunar_config,
     get_high_risk_lunar_config,
     get_emergency_lunar_config,
@@ -24,10 +26,10 @@ from config.gcs import (
 )
 
 __all__ = [
-    'OptimizationPriority',
-    'CostWeights',
     'CostConfigurator',
+    'CostWeights',
     'CostOptimizer',
+    'OptimizationPriority',
     'LunarRoverGCSConfig',
     'get_lunar_standard_config',
     'get_lunar_high_risk_config',

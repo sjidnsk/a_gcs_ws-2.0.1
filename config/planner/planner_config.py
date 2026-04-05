@@ -10,14 +10,16 @@ A*与GCS分层轨迹规划配置模块
 
 import numpy as np
 import warnings
-from typing import Any, Dict, Optional, List, Tuple
+from typing import Any, Dict, Optional, List, Tuple, TYPE_CHECKING
 from dataclasses import dataclass, field
 
-from .performance_monitor import PerformanceMetrics
+# 仅在类型检查时导入，避免循环依赖
+if TYPE_CHECKING:
+    from path_planner.scripts.planner_support.performance_monitor import PerformanceMetrics
 
 # 导入优化配置
 try:
-    from iris_pkg import (
+    from config.iris import (
         IrisNpConfigOptimized,
         get_high_safety_config,
         get_fast_processing_config,
@@ -162,7 +164,7 @@ class PlannerConfig:
     def _apply_gcs_strategy_preset(self):
         """应用GCS策略预设"""
         try:
-            from gcs_pkg.scripts import (
+            from config.gcs import (
                 get_standard_lunar_config,
                 get_high_risk_lunar_config,
                 get_emergency_lunar_config,
@@ -198,7 +200,7 @@ class PlannerConfig:
     def _apply_gcs_cost_preset(self):
         """应用GCS成本预设"""
         try:
-            from gcs_pkg.scripts import CostConfigurator, CostWeights
+            from config.gcs import CostConfigurator, CostWeights
             
             configurator = CostConfigurator()
             
@@ -277,7 +279,7 @@ class PlannerResult:
     reparameterization_time: float = 0.0  # 重新参数化耗时
     
     # 详细性能指标
-    performance_metrics: Optional[PerformanceMetrics] = None
+    performance_metrics: Optional['PerformanceMetrics'] = None
     performance_summary: Dict = field(default_factory=dict)
     
     # 详细时间分解

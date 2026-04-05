@@ -8,16 +8,8 @@ import numpy as np
 from typing import List, Optional
 from dataclasses import dataclass
 
-# 导入GCS相关模块
-from gcs_pkg.scripts.rounding import (
-    greedyForwardPathSearch,
-    greedyBackwardPathSearch,
-    randomForwardPathSearch,
-    randomBackwardPathSearch,
-    averageVertexPositionGcs,
-)
-
-from gcs_pkg.scripts.solver import (
+# 导入求解器配置
+from config.solver import (
     SolverPerformanceProfile,
     ProblemSize,
     SolverType,
@@ -62,6 +54,15 @@ class LunarRoverGCSConfig:
     
     def _get_rounding_strategies(self) -> List:
         """根据场景获取舍入策略"""
+        # 延迟导入以避免循环依赖
+        from gcs_pkg.scripts.rounding import (
+            greedyForwardPathSearch,
+            greedyBackwardPathSearch,
+            randomForwardPathSearch,
+            randomBackwardPathSearch,
+            averageVertexPositionGcs,
+        )
+
         strategies_map = {
             "standard": [
                 greedyForwardPathSearch,

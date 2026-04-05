@@ -6,7 +6,7 @@ IrisNp 性能报告模块
 作者: Path Planning Team
 """
 
-from ..config.iris_np_config import IrisNpConfig
+from config.iris import IrisNpConfig
 from .iris_np_region_data import IrisNpResult
 from .iris_np_collision import SimpleCollisionCheckerForIrisNp
 

@@ -20,7 +20,7 @@ IrisNp 凸区域生成模块
 作者: Path Planning Team
 """
 
-from .config import (
+from config.iris import (
     IrisNpConfig,
     IrisNpConfigOptimized,
     get_high_safety_config,

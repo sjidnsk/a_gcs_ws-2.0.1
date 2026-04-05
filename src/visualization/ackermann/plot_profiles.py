@@ -6,7 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from typing import Optional
 
-from .config import VisualizationConfig
+from config.visualization import VisualizationConfig
 from .trajectory_sampler import TrajectoryData
 from ackermann_gcs_pkg.ackermann_data_structures import VehicleParams
 

@@ -8,7 +8,7 @@ import numpy as np
 from typing import Optional
 import logging
 
-from .config import ControlPointData
+from config.visualization import ControlPointData
 
 # 配置日志
 logger = logging.getLogger(__name__)

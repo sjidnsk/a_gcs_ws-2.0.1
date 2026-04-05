@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from typing import List, Optional, Tuple
 from pydrake.geometry.optimization import HPolyhedron
 
-from .config import VisualizationConfig, ControlPointConfig, ControlPointData
+from config.visualization import VisualizationConfig, ControlPointConfig, ControlPointData
 from .trajectory_sampler import TrajectoryData
 from .region_renderer import RegionRenderer
 from .path_comparator import PathComparator

@@ -38,7 +38,7 @@ from pydrake.geometry.optimization import HPolyhedron
 
 # 导入优化配置
 try:
-    from ..config.iris_np_config_optimized import (
+    from config.iris import (
         IrisNpConfigOptimized,
         get_high_safety_config,
         get_fast_processing_config,
@@ -50,7 +50,7 @@ except ImportError:
     warnings.warn("优化配置模块未找到，使用默认配置")
 
 # 导入内部模块
-from ..config.iris_np_config import IrisNpConfig
+from config.iris import IrisNpConfig
 from .iris_np_region_data import IrisNpRegion, IrisNpResult
 from .iris_np_collision import SimpleCollisionCheckerForIrisNp
 from .iris_np_expansion import IrisNpExpansion

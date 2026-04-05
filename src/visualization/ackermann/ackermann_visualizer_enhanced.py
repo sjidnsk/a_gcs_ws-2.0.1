@@ -9,7 +9,7 @@ from typing import List, Optional
 from pydrake.geometry.optimization import HPolyhedron
 from pydrake.trajectories import BsplineTrajectory
 
-from .config import VisualizationConfig
+from config.visualization import VisualizationConfig
 from .trajectory_sampler import TrajectorySampler, TrajectoryData
 from .plot_2d_trajectory import Plot2DTrajectory
 from .plot_3d_trajectory import Plot3DTrajectory

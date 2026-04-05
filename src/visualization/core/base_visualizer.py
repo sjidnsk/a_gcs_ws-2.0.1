@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from typing import Optional, Any, Dict
 import matplotlib.pyplot as plt
 import numpy as np
-from .config import PlotConfig
+from config.visualization import PlotConfig
 from .output_manager import VisualizationOutputManager
 
 
