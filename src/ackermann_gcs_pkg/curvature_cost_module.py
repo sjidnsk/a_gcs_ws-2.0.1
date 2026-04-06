@@ -413,27 +413,6 @@ class CurvatureCostModule:
             if verbose:
                 print(f"  [Error] Failed to add convex relaxed curvature cost: {e}")
 
-    def _add_nonconvex_curvature_cost(
-        self,
-        bezier_gcs,
-        weight: float,
-        verbose: bool
-    ) -> None:
-        """
-        添加非凸曲率成本（需要SCP处理）
-
-        Args:
-            bezier_gcs: BezierGCS对象
-            weight: 权重
-            verbose: 是否输出调试信息
-        """
-        if verbose:
-            print(f"  Adding non-convex curvature cost (weight={weight})...")
-            print("  [Warning] This requires SCP to handle non-convexity.")
-
-        # TODO: 实现非凸曲率成本的添加
-        # 这需要在SCP迭代中进行线性化处理
-        pass
 
     def compute_cost_gradient(
         self,

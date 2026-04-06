@@ -17,7 +17,6 @@ from pydrake.solvers import (
     Constraint,
     LinearEqualityConstraint,
 )
-from pydrake.symbolic import DecomposeLinearExpressions, Expression
 
 from gcs_pkg.scripts.core.bezier import BezierGCS
 

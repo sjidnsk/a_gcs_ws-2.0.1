@@ -328,32 +328,23 @@ def example_usage():
     
     # 1. 获取预定义配置
     lunar_config = get_standard_lunar_config()
-    
+
     # 2. 创建走廊分解配置
     config = PlannerConfig(
         # 走廊参数
         corridor_width=lunar_config.corridor_width,
         boundary_margin=lunar_config.boundary_margin,
-        
-        # GCS参数
-        gcs_max_theta_velocity=lunar_config.max_theta_velocity,
-        gcs_max_theta_jump=lunar_config.max_theta_jump,
-        
-        # 单位向量模式
-        gcs_use_unit_vector=lunar_config.enable_unit_vector,
-        gcs_use_socp_relaxation=lunar_config.enable_socp,
     )
-    
+
     # 3. 执行规划
     # planner = HybridAStarGCSPlanner(c_space, config)
     # result: PlannerResult = planner.process(path)
-    
+
     print("月面月球车GCS配置示例")
     print(f"场景类型: {lunar_config.scenario}")
     print(f"舍入策略数: {len(lunar_config.rounding_strategies)}")
     print(f"最大求解时间: {lunar_config.solver_profile.max_time}秒")
     print(f"预处理: {'启用' if lunar_config.enable_preprocessing else '禁用'}")
-    print(f"单位向量模式: {'启用' if lunar_config.enable_unit_vector else '禁用'}")
 
 
 if __name__ == "__main__":

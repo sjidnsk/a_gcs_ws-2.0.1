@@ -88,17 +88,7 @@ class PlannerConfig:
     gcs_continuity: int = 2  # 提高到C3以获得更平滑的曲线
     gcs_time_weight: float = 0.1
     gcs_path_length_weight: float = 1.0
-    
-    # 3D GCS参数
-    gcs_use_3d: bool = True  # 是否使用3D模式 (x, y, theta)
-    gcs_theta_margin: float = np.pi / 6  # theta扩展裕度
-    gcs_max_theta_velocity: float = np.pi  # 最大theta速度 (rad/s)
-    gcs_max_theta_jump: float = np.pi / 4  # 相邻区域最大theta跳变
-    
-    # 4D GCS参数（单位向量表示）
-    gcs_use_unit_vector: bool = True  # 是否使用单位向量表示（推荐）
-    gcs_use_socp_relaxation: bool = True  # 是否使用SOCP松弛
-    
+
     # GCS策略配置（快速选择）
     # 可选: "standard", "high_risk", "emergency", "complex", "custom"
     gcs_strategy_preset: str = "standard"
@@ -116,17 +106,6 @@ class PlannerConfig:
     # GCS边界条件配置
     gcs_zero_velocity_at_boundaries: bool = True  # 是否在起点和终点设置零速度约束（改为False以减少突变）
     gcs_min_time_derivative: float = 1.0  # 时间轨迹导数的最小值，防止 dh/ds 过小导致速度突变（降低以允许更平滑的过渡）
-    
-    # 贝塞尔曲线重新参数化配置
-    gcs_enable_reparameterization: bool = True  # 是否启用重新参数化
-    gcs_reparameterization_projection_method: str = "radial"  # "radial" 或 "tangent"
-    gcs_reparameterization_check_continuity: bool = True
-    gcs_reparameterization_continuity_order: int = 2
-    gcs_reparameterization_enable_iterative_refinement: bool = True
-    gcs_reparameterization_max_iterations: int = 10
-    gcs_reparameterization_enable_smoothing: bool = True
-    gcs_reparameterization_smoothing_window: int = 5
-    gcs_reparameterization_smoothing_iterations: int = 3
 
     # 阿克曼车辆参数
     ackermann_wheelbase: float = 2.5  # 轴距（米）
@@ -255,7 +234,7 @@ class PlannerResult:
     gcs_trajectory: Optional[Any] = None
     gcs_waypoints: Optional[np.ndarray] = None
     gcs_sample_times: Optional[np.ndarray] = None  # 采样时间点
-    gcs_mode: str = ""  # GCS模式：'ackermann', '4d', '3d', '2d'
+    gcs_mode: str = ""  # GCS模式：'ackermann', '2d'
     gcs_solve_time: float = 0.0
     used_gcs: bool = False
     num_obstacles: int = 0
@@ -268,16 +247,7 @@ class PlannerResult:
     config: PlannerConfig = None
     used_iris: bool = False
     iris_mode_used: str = ""
-    
-    # 4D GCS 结果
-    gcs_regions_4d: Optional[List] = None
-    gcs_waypoints_4d: Optional[np.ndarray] = None
-    
-    # 重新参数化结果
-    reparameterized_trajectory: Optional[Any] = None  # 重新参数化后的轨迹
-    reparameterization_metrics: Optional[Dict] = None  # 重新参数化的性能指标
-    reparameterization_time: float = 0.0  # 重新参数化耗时
-    
+
     # 详细性能指标
     performance_metrics: Optional['PerformanceMetrics'] = None
     performance_summary: Dict = field(default_factory=dict)

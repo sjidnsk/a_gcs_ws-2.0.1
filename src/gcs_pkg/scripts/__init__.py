@@ -15,6 +15,9 @@ GCS (Graph of Convex Sets) 路径规划模块
     CostConfigurator: 成本配置器
     AdaptiveSolverConfig: 自适应求解器配置
 
+注意：AckermannGCS已迁移到独立的ackermann_gcs_pkg包
+请使用: from ackermann_gcs_pkg.ackermann_gcs_planner import AckermannGCSPlanner
+
 使用示例:
     >>> from gcs_pkg.scripts import BezierGCS, CostConfigurator
     >>> gcs = BezierGCS(regions, order=4, continuity=2)
@@ -28,8 +31,6 @@ from .core import (
     LinearGCS,
     BezierGCS,
     BezierTrajectory,
-    AckermannGCS,
-    AckermannTrajectory,
     polytopeDimension,
     convexSetDimension,
     intersectionDimension,
@@ -85,8 +86,6 @@ __all__ = [
     'LinearGCS',
     'BezierGCS',
     'BezierTrajectory',
-    'AckermannGCS',
-    'AckermannTrajectory',
     # 维度计算函数
     'polytopeDimension',
     'convexSetDimension',

@@ -14,8 +14,6 @@ IrisNp 凸区域生成模块
 子模块:
 - config: 配置模块
 - core: 核心功能模块
-- theta: Theta处理模块
-- adapters: 配置空间扩展模块
 
 作者: Path Planning Team
 """
@@ -47,24 +45,6 @@ from .core import (
     DRAKE_AVAILABLE
 )
 
-from .theta import (
-    ThetaUnitVectorHandler,
-    UnitVectorConfig,
-    theta_to_unit_vector,
-    unit_vector_to_theta,
-    HybridThetaConstraintStrategy,
-    HybridConstraintConfig
-)
-
-from .adapters import (
-    IrisNpRegion3D,
-    ThetaRangeConfig,
-    IrisRegion3DAdapter,
-    IrisNpRegion4D,
-    ThetaRangeConfigEnhanced,
-    IrisRegion4DAdapter
-)
-
 __all__ = [
     # 配置
     'IrisNpConfig',
@@ -93,23 +73,7 @@ __all__ = [
     'IrisNpRegionGenerator',
     'visualize_iris_np_result',
     'check_drake_availability',
-    'DRAKE_AVAILABLE',
-
-    # Theta处理
-    'ThetaUnitVectorHandler',
-    'UnitVectorConfig',
-    'theta_to_unit_vector',
-    'unit_vector_to_theta',
-    'HybridThetaConstraintStrategy',
-    'HybridConstraintConfig',
-
-    # 配置空间扩展
-    'IrisNpRegion3D',
-    'ThetaRangeConfig',
-    'IrisRegion3DAdapter',
-    'IrisNpRegion4D',
-    'ThetaRangeConfigEnhanced',
-    'IrisRegion4DAdapter'
+    'DRAKE_AVAILABLE'
 ]
 
 __version__ = '2.0.0'

@@ -24,16 +24,6 @@ iris_pkg/
 │   ├── iris_np_parallel.py     # 并行处理辅助函数
 │   └── iris_np_region.py       # 主生成器 (IrisNpRegionGenerator, 可视化)
 │
-├── theta/                      # Theta 处理模块
-│   ├── __init__.py
-│   ├── theta_unit_vector_handler.py  # Theta 单位向量处理
-│   └── hybrid_theta_constraint.py     # 混合 Theta 约束策略
-│
-├── adapters/                   # 配置空间扩展模块
-│   ├── __init__.py
-│   ├── iris_region_3d_adapter.py     # 2D → 3D (x, y, theta) 扩展
-│   └── iris_region_4d_adapter.py     # 2D → 4D (x, y, u, w) 扩展
-│
 └── docs/                       # 文档
     └── README.md               # 原始文档
 ```
@@ -64,34 +54,6 @@ iris_pkg/
 | `iris_np_expansion.py` | 区域膨胀 | `IrisNpExpansion` 及各种膨胀算法 |
 | `iris_np_parallel.py` | 并行处理 | `init_worker`, `process_single_seed` |
 | `iris_np_region.py` | 主生成器 | `IrisNpRegionGenerator`, `visualize_iris_np_result` |
-
-### 3. theta/ - Theta 处理模块
-
-解决 Theta 的非凸性问题：
-
-- **`theta_unit_vector_handler.py`**: Theta 单位向量处理器
-  - 将 θ 转换为单位向量 (u, w) = (cos(θ), sin(θ))
-  - 支持 SOCP 松弛约束
-  - 处理周期性和连续性
-
-- **`hybrid_theta_constraint.py`**: 混合 Theta 约束策略
-  - 结合 SOCP 约束和扇形约束
-  - 自动处理多周期问题
-  - 保证凸性，GCS 可解
-
-### 4. adapters/ - 配置空间扩展模块
-
-将 2D 凸区域扩展到更高维配置空间：
-
-| 文件 | 扩展目标 | 配置空间 |
-|------|----------|----------|
-| `iris_region_3d_adapter.py` | 2D → 3D | (x, y, θ) |
-| `iris_region_4d_adapter.py` | 2D → 4D | (x, y, u, w) |
-
-**4D 扩展的优势**：
-- 使用单位向量替代 theta，解决非凸性问题
-- 支持 SOCP 松弛约束
-- 更好的数值稳定性
 
 ## 🚀 使用示例
 
@@ -142,76 +104,6 @@ print(f"总面积: {result.total_area:.2f} 平方米")
 print(f"覆盖率: {result.coverage_ratio*100:.1f}%")
 ```
 
-### 3D 配置空间扩展
-
-```python
-from iris_pkg import (
-    IrisNpRegionGenerator,
-    IrisNpRegion3D,
-    IrisRegion3DAdapter,
-    ThetaRangeConfig
-)
-
-# 生成 2D 区域
-generator = IrisNpRegionGenerator()
-result_2d = generator.generate_from_path(path, obstacle_map, resolution, origin)
-
-# 扩展到 3D 配置空间
-theta_config = ThetaRangeConfig(
-    theta_min=0.0,
-    theta_max=2 * np.pi,
-    enforce_continuity=True,
-    max_theta_jump=np.pi / 4
-)
-
-adapter = IrisRegion3DAdapter(theta_config)
-regions_3d = adapter.extend_to_3d(
-    regions_2d=result_2d.regions,
-    path=path,
-    obstacle_map=obstacle_map,
-    resolution=resolution,
-    origin=origin
-)
-```
-
-### 4D 配置空间扩展（推荐）
-
-```python
-from iris_pkg import (
-    IrisNpRegionGenerator,
-    IrisNpRegion4D,
-    IrisRegion4DAdapter,
-    ThetaRangeConfigEnhanced,
-    ThetaUnitVectorHandler
-)
-
-# 生成 2D 区域
-generator = IrisNpRegionGenerator()
-result_2d = generator.generate_from_path(path, obstacle_map, resolution, origin)
-
-# 扩展到 4D 配置空间 (x, y, u, w)
-theta_config = ThetaRangeConfigEnhanced(
-    use_unit_vector=True,
-    use_socp_relaxation=True,
-    use_hybrid_constraints=True,
-    enforce_continuity=True
-)
-
-adapter = IrisRegion4DAdapter(theta_config)
-regions_4d = adapter.extend_to_4d(
-    regions_2d=result_2d.regions,
-    path=path,
-    obstacle_map=obstacle_map,
-    resolution=resolution,
-    origin=origin
-)
-
-# 使用单位向量处理器
-handler = ThetaUnitVectorHandler()
-u, w = handler.theta_to_unit_vector(theta)
-theta = handler.unit_vector_to_theta(u, w)
-```
-
 ## 📊 依赖关系
 
 ```
@@ -221,15 +113,6 @@ config/
 core/
 ├── config/ (依赖)
 └── (内部依赖)
-
-theta/
-├── Drake (依赖)
-└── (内部依赖)
-
-adapters/
-├── core/ (依赖)
-├── theta/ (依赖)
-└── Drake (依赖)
 ```
 
 ## 🔧 安装依赖
