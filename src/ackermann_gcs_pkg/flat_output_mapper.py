@@ -10,6 +10,9 @@ from pydrake.trajectories import BsplineTrajectory
 from scipy.optimize import root_scalar
 
 from .ackermann_data_structures import VehicleParams
+from .curvature_utils import compute_curvature
+from .trajectory_utils import generate_sample_times, compute_derivatives
+from .constants import NUMERICAL_TOLERANCE, DEFAULT_NUM_SAMPLES
 
 
 class FlatOutputMapper:
@@ -62,7 +65,7 @@ class FlatOutputMapper:
         y_dot: np.ndarray,
         x_ddot: np.ndarray,
         y_ddot: np.ndarray,
-        epsilon: float = 1e-10,
+        epsilon: float = NUMERICAL_TOLERANCE,
     ) -> np.ndarray:
         """
         计算曲率
@@ -79,11 +82,8 @@ class FlatOutputMapper:
         Returns:
             曲率，形状为(N,)
         """
-        denominator = (x_dot**2 + y_dot**2) ** 1.5
-        # 除零保护
-        denominator = np.where(denominator < epsilon, 1.0, denominator)
-        numerator = x_dot * y_ddot - y_dot * x_ddot
-        return numerator / denominator
+        # 使用新的工具函数
+        return compute_curvature(x_dot, y_dot, x_ddot, y_ddot, epsilon=epsilon)
 
     @staticmethod
     def compute_steering_angle(curvature: np.ndarray, wheelbase: float) -> np.ndarray:
@@ -134,7 +134,7 @@ class FlatOutputMapper:
 def compute_flat_output_mapping(
     trajectory: BsplineTrajectory,
     vehicle_params: VehicleParams,
-    num_samples: int = 100,
+    num_samples: int = DEFAULT_NUM_SAMPLES,
 ) -> Dict[str, np.ndarray]:
     """
     计算平坦输出映射
@@ -144,7 +144,7 @@ def compute_flat_output_mapping(
     Args:
         trajectory: 贝塞尔轨迹对象（BsplineTrajectory）
         vehicle_params: 车辆参数（VehicleParams）
-        num_samples: 采样点数，默认为100
+        num_samples: 采样点数，默认为DEFAULT_NUM_SAMPLES
 
     Returns:
         字典，包含以下键：
@@ -155,8 +155,8 @@ def compute_flat_output_mapping(
         - steering_angle: 转向角轨迹，形状为(N,)
         - acceleration: 加速度轨迹，形状为(N,)
     """
-    # 采样时间点
-    t_samples = np.linspace(trajectory.start_time(), trajectory.end_time(), num_samples)
+    # 采样时间点 - 使用新的工具函数
+    t_samples = generate_sample_times(trajectory, num_samples)
 
     # 计算位置、速度、航向角、曲率、转向角、加速度
     position_list = []
@@ -167,19 +167,14 @@ def compute_flat_output_mapping(
     acceleration_list = []
 
     for t in t_samples:
-        # 计算位置
-        position = trajectory.value(t)
-        position_list.append(position)
+        # 计算位置和导数 - 使用新的工具函数
+        position, first_deriv, second_deriv = compute_derivatives(trajectory, t, order=2)
+        position_list.append(position.reshape(2, 1))
 
-        # 计算一阶导数（速度）
-        velocity_derivative = trajectory.EvalDerivative(t, 1)
-        x_dot = velocity_derivative[0]
-        y_dot = velocity_derivative[1]
-
-        # 计算二阶导数（加速度）
-        acceleration_derivative = trajectory.EvalDerivative(t, 2)
-        x_ddot = acceleration_derivative[0]
-        y_ddot = acceleration_derivative[1]
+        x_dot = first_deriv[0]
+        y_dot = first_deriv[1]
+        x_ddot = second_deriv[0]
+        y_ddot = second_deriv[1]
 
         # 计算速度
         velocity = FlatOutputMapper.compute_velocity(x_dot, y_dot)
@@ -202,7 +197,7 @@ def compute_flat_output_mapping(
         acceleration_list.append(acceleration)
 
     return {
-        "position": np.hstack(position_list),  # (2, 100)
+        "position": np.hstack(position_list),  # (2, N)
         "velocity": np.array(velocity_list),
         "heading": np.array(heading_list),
         "curvature": np.array(curvature_list),

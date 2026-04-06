@@ -33,6 +33,9 @@ from .ackermann_data_structures import (
     CurvatureDerivatives,
 )
 
+# 导入数值安全工具
+from .numerical_safety_utils import safe_power_divide, DEFAULT_SMALL_VALUE
+
 
 class CurvatureDerivativeCost:
     """
@@ -239,10 +242,12 @@ class CurvatureDerivativeCost:
         d_prime = 1.5 * speed * (2 * x_dot * x_ddot + 2 * y_dot * y_ddot)
 
         # dκ/dt = (n'd - nd') / d²
-        dkappa_dt = (n_prime * d - n * d_prime) / (d ** 2)
+        # 使用安全除法避免d为0的情况
+        dkappa_dt = safe_power_divide(n_prime * d - n * d_prime, d, power=2, epsilon=self.config.numerical_tolerance)
 
         # dκ/ds = (dκ/dt) / ||r'(s)||
-        dkappa_ds = dkappa_dt / speed
+        # 使用安全除法
+        dkappa_ds = safe_power_divide(dkappa_dt, speed, power=1, epsilon=self.config.numerical_tolerance)
 
         return dkappa_ds
 
@@ -286,19 +291,19 @@ class CurvatureDerivativeCost:
                 speed=speed
             )
 
-        # 计算曲率
+        # 计算曲率 - 使用安全除法
         numerator = x_dot * y_ddot - y_dot * x_ddot
-        denominator = speed ** 3
-        kappa = numerator / denominator
+        kappa = safe_power_divide(numerator, speed, power=3, epsilon=self.config.numerical_tolerance)
 
         # 计算曲率导数
         n = numerator
-        d = denominator
+        d = speed ** 3
         n_prime = x_dot * y_dddot + x_ddot * y_ddot - y_dot * x_dddot - y_ddot * x_ddot
         d_prime = 1.5 * speed * (2 * x_dot * x_ddot + 2 * y_dot * y_ddot)
 
-        dkappa_dt = (n_prime * d - n * d_prime) / (d ** 2)
-        dkappa_ds = dkappa_dt / speed
+        # 使用安全除法
+        dkappa_dt = safe_power_divide(n_prime * d - n * d_prime, d, power=2, epsilon=self.config.numerical_tolerance)
+        dkappa_ds = safe_power_divide(dkappa_dt, speed, power=1, epsilon=self.config.numerical_tolerance)
 
         return CurvatureDerivatives(
             curvature=kappa,
@@ -469,3 +474,35 @@ class CurvatureDerivativeCost:
                 jacobian[i * 2 + j] = (dkappa_ds_plus - dkappa_ds_current) / epsilon
 
         return jacobian
+    
+    # ========== CostCalculatorInterface 接口实现 ==========
+    
+    def compute_cost(self, control_points: np.ndarray) -> float:
+        """
+        计算曲率导数平方积分成本（接口方法）
+        
+        实现 CostCalculatorInterface 接口
+        
+        Args:
+            control_points: 贝塞尔曲线控制点，形状(n, 2)
+            
+        Returns:
+            成本值
+        """
+        return self.compute_curvature_derivative_cost(control_points)
+    
+    def compute_cost_gradient(self, control_points: np.ndarray) -> np.ndarray:
+        """
+        计算成本对控制点的梯度（接口方法）
+        
+        实现 CostCalculatorInterface 接口
+        
+        Args:
+            control_points: 控制点数组，形状(n, 2)
+            
+        Returns:
+            梯度数组，形状(n * 2,)
+        """
+        gradient_2d = self.compute_gradient(control_points)
+        # 将 (n, 2) 形状转换为 (n*2,) 形状
+        return gradient_2d.flatten()

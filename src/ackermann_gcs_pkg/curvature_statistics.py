@@ -15,6 +15,10 @@ from .ackermann_data_structures import (
     ImprovementMetrics
 )
 
+# 导入新的工具模块
+from .constants import DEFAULT_NUM_SAMPLES, SMALL_VALUE_THRESHOLD
+from .curvature_utils import compute_curvature
+
 
 class CurvatureStatistics:
     """
@@ -23,7 +27,7 @@ class CurvatureStatistics:
     提供曲率统计计算和平滑度评估功能。
     """
 
-    def __init__(self, num_samples: int = 100):
+    def __init__(self, num_samples: int = DEFAULT_NUM_SAMPLES):
         """
         初始化曲率统计模块
 
@@ -110,19 +114,8 @@ class CurvatureStatistics:
         x_ddot = second_deriv[0]
         y_ddot = second_deriv[1]
 
-        # 计算速度模长
-        speed = np.sqrt(x_dot**2 + y_dot**2)
-
-        # 避免除零
-        if speed < 1e-6:
-            return 0.0
-
-        # 计算曲率
-        numerator = x_dot * y_ddot - y_dot * x_ddot
-        denominator = speed**3
-        curvature = numerator / denominator
-
-        return curvature
+        # 使用新的工具函数计算曲率
+        return compute_curvature(x_dot, y_dot, x_ddot, y_ddot, epsilon=SMALL_VALUE_THRESHOLD)
 
     def compute_curvature_stats(
         self,

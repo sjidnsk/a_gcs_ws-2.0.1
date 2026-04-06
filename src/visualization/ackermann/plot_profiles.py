@@ -10,6 +10,9 @@ from config.visualization import VisualizationConfig
 from .trajectory_sampler import TrajectoryData
 from ackermann_gcs_pkg.ackermann_data_structures import VehicleParams
 
+# 导入新的工具模块
+from ackermann_gcs_pkg.formatting_utils import radians_to_degrees, compute_cumulative_path_length
+
 
 class PlotProfiles:
     """曲线图绘制器
@@ -73,8 +76,8 @@ class PlotProfiles:
         t = trajectory_data.t_samples
         theta = trajectory_data.heading
         
-        # 绘制航向角曲线
-        ax.plot(t, np.degrees(theta), 'b-', linewidth=2, label='Heading')
+        # 绘制航向角曲线 - 使用新的工具函数
+        ax.plot(t, radians_to_degrees(theta), 'b-', linewidth=2, label='Heading')
         
         # 设置坐标轴
         ax.set_xlabel('Time (s)', fontsize=self.config.label_font_size)
@@ -141,11 +144,11 @@ class PlotProfiles:
         t = trajectory_data.t_samples
         delta = trajectory_data.steering_angle
         
-        # 绘制转向角曲线（转换为度）
-        ax.plot(t, np.degrees(delta), 'b-', linewidth=2, label='Steering Angle')
+        # 绘制转向角曲线（转换为度）- 使用新的工具函数
+        ax.plot(t, radians_to_degrees(delta), 'b-', linewidth=2, label='Steering Angle')
         
         # 绘制最大转向角限制
-        max_delta_deg = np.degrees(vehicle_params.max_steering_angle)
+        max_delta_deg = radians_to_degrees(vehicle_params.max_steering_angle)
         ax.axhline(
             y=max_delta_deg,
             color='r',
@@ -222,19 +225,16 @@ class PlotProfiles:
             s = trajectory_data.path_length
             theta = trajectory_data.heading
             
-            ax.plot(s, np.degrees(theta), 'r-', linewidth=2, label='GCS Trajectory')
+            ax.plot(s, radians_to_degrees(theta), 'r-', linewidth=2, label='GCS Trajectory')
         
         # 绘制A*路径的θ曲线（如果有）
         if astar_path is not None and astar_path.shape[1] >= 3:
-            # 计算A*路径长度
-            diff = np.diff(astar_path[:, :2], axis=0)
-            distances = np.sqrt(np.sum(diff**2, axis=1))
-            s_astar = np.zeros(len(astar_path))
-            s_astar[1:] = np.cumsum(distances)
+            # 计算A*路径长度 - 使用新的工具函数
+            s_astar = compute_cumulative_path_length(astar_path[:, :2])
             
             theta_astar = astar_path[:, 2]
             
-            ax.plot(s_astar, np.degrees(theta_astar), 'g--', linewidth=1.5, label='A* Path')
+            ax.plot(s_astar, radians_to_degrees(theta_astar), 'g--', linewidth=1.5, label='A* Path')
         
         # 设置坐标轴
         ax.set_xlabel('Path Length (m)', fontsize=self.config.label_font_size)

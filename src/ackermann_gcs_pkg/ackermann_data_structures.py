@@ -19,6 +19,9 @@ from enum import Enum
 import numpy as np
 import time
 
+# 导入数值安全工具
+from .numerical_safety_utils import check_tan_safety, NumericalSafetyError
+
 
 # === 约束违反阈值常量 ===
 # 用于判断约束是否违反的阈值
@@ -88,6 +91,12 @@ class VehicleParams:
             raise ValueError(f"max_velocity must be positive, got {self.max_velocity}")
         if self.max_acceleration <= 0:
             raise ValueError(f"max_acceleration must be positive, got {self.max_acceleration}")
+        
+        # 检查max_steering_angle是否接近π/2，避免tan函数发散
+        try:
+            check_tan_safety(self.max_steering_angle, angle_name="max_steering_angle")
+        except NumericalSafetyError as e:
+            raise ValueError(str(e))
 
         # 计算最大曲率：κ_max = tan(δ_max) / L
         self.max_curvature = np.tan(self.max_steering_angle) / self.wheelbase

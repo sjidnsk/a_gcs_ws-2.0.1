@@ -12,7 +12,7 @@
 """
 
 import numpy as np
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List
 from scipy.special import roots_legendre
 
 from .ackermann_data_structures import (
@@ -21,10 +21,17 @@ from .ackermann_data_structures import (
     LinearizedCostCoefficients,
 )
 
+# 导入数值安全工具
+from .numerical_safety_utils import safe_curvature_calculation, DEFAULT_SMALL_VALUE
+
+# 导入接口
+from .cost_calculator_interface import CostCalculatorInterface
+
 # 导入新模块
 from .curvature_cost_linearizer import CurvatureCostLinearizer
 from .curvature_derivative_cost import CurvatureDerivativeCost
 from .curvature_peak_cost import CurvaturePeakCost
+from .curvature_squared_cost_calculator import CurvatureSquaredCostCalculator
 from .analytic_gradient_calculator import AnalyticGradientCalculator
 
 
@@ -35,12 +42,17 @@ class CurvatureCostModule:
     提供曲率惩罚成本的计算和添加功能，用于引导生成更平滑的轨迹。
     """
 
-    def __init__(self, config: CurvatureCostConfig):
+    def __init__(
+        self,
+        config: CurvatureCostConfig,
+        cost_calculators: Optional[List[CostCalculatorInterface]] = None
+    ):
         """
         初始化曲率成本模块
 
         Args:
             config: 曲率成本配置
+            cost_calculators: 成本计算器列表 (可选，用于依赖注入)
         """
         self.config = config
         self.sampling_points = None
@@ -51,7 +63,23 @@ class CurvatureCostModule:
         self.linearizer = CurvatureCostLinearizer(config)
         self.derivative_cost = CurvatureDerivativeCost(config)
         self.peak_cost = CurvaturePeakCost(config)
-        self.gradient_calculator = AnalyticGradientCalculator(config)
+        
+        # 初始化成本计算器
+        if cost_calculators is None:
+            # 默认创建成本计算器
+            self.cost_calculators = [
+                CurvatureSquaredCostCalculator(config),
+                CurvatureDerivativeCost(config),
+                CurvaturePeakCost(config),
+            ]
+        else:
+            self.cost_calculators = cost_calculators
+        
+        # 初始化梯度计算器，注入成本计算器
+        self.gradient_calculator = AnalyticGradientCalculator(
+            config,
+            cost_calculators=self.cost_calculators
+        )
 
     def _init_integration_points(self):
         """
@@ -175,17 +203,11 @@ class CurvatureCostModule:
         x_ddot = second_deriv[0]
         y_ddot = second_deriv[1]
 
-        # 计算速度模长
-        speed = np.sqrt(x_dot**2 + y_dot**2)
-
-        # 避免除零
-        if speed < self.config.numerical_tolerance:
-            return 0.0, speed
-
-        # 计算曲率
-        numerator = x_dot * y_ddot - y_dot * x_ddot
-        denominator = speed**3
-        curvature = numerator / denominator
+        # 使用安全的曲率计算函数，避免除零
+        curvature, speed = safe_curvature_calculation(
+            x_dot, y_dot, x_ddot, y_ddot,
+            epsilon=self.config.numerical_tolerance
+        )
 
         return curvature, speed
 

@@ -24,7 +24,7 @@ J₃ = max|κ(s)| (曲率峰值)
 """
 
 import numpy as np
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, List
 import hashlib
 from scipy.special import roots_legendre
 
@@ -32,6 +32,21 @@ from .ackermann_data_structures import (
     CurvatureCostConfig,
     CurvatureCostWeights,
 )
+
+# 导入数值安全工具
+from .numerical_safety_utils import safe_power_divide, DEFAULT_SMALL_VALUE
+
+# 导入接口
+from .cost_calculator_interface import CostCalculatorInterface
+
+
+class DependencyInjectionError(Exception):
+    """
+    依赖注入错误
+    
+    当必需的依赖未设置时抛出此异常
+    """
+    pass
 
 
 class AnalyticGradientCalculator:
@@ -44,6 +59,7 @@ class AnalyticGradientCalculator:
     def __init__(
         self,
         config: CurvatureCostConfig,
+        cost_calculators: Optional[List[CostCalculatorInterface]] = None,
         enable_cache: bool = True
     ):
         """
@@ -51,14 +67,34 @@ class AnalyticGradientCalculator:
 
         Args:
             config: 曲率成本配置
+            cost_calculators: 成本计算器列表 (依赖注入，可选)
             enable_cache: 是否启用缓存
         """
         self.config = config
+        self.cost_calculators = cost_calculators or []
         self.enable_cache = enable_cache
         self.cache: Dict[str, np.ndarray] = {}
         self.sampling_points = None
         self.integration_weights = None
         self._init_integration_points()
+    
+    def set_cost_calculators(self, calculators: List[CostCalculatorInterface]) -> None:
+        """
+        设置成本计算器列表
+        
+        Args:
+            calculators: 成本计算器列表
+        """
+        self.cost_calculators = calculators
+    
+    def get_cost_calculators(self) -> List[CostCalculatorInterface]:
+        """
+        获取当前成本计算器列表
+        
+        Returns:
+            成本计算器列表
+        """
+        return self.cost_calculators
 
     def _init_integration_points(self):
         """初始化数值积分采样点和权重"""
@@ -204,7 +240,8 @@ class AnalyticGradientCalculator:
             return 0.0, speed, first_deriv, second_deriv
 
         numerator = x_dot * y_ddot - y_dot * x_ddot
-        curvature = numerator / (speed ** 3)
+        # 使用安全除法避免除零
+        curvature = safe_power_divide(numerator, speed, power=3, epsilon=self.config.numerical_tolerance)
 
         return curvature, speed, first_deriv, second_deriv
 
@@ -397,10 +434,12 @@ class AnalyticGradientCalculator:
         d_prime = 1.5 * speed * (2 * x_dot * x_ddot + 2 * y_dot * y_ddot)
 
         # dκ/dt = (n'd - nd') / d²
-        dkappa_dt = (n_prime * d - n * d_prime) / (d ** 2)
+        # 使用安全除法
+        dkappa_dt = safe_power_divide(n_prime * d - n * d_prime, d, power=2, epsilon=self.config.numerical_tolerance)
 
         # dκ/ds = (dκ/dt) / ||r'(s)||
-        dkappa_ds = dkappa_dt / speed
+        # 使用安全除法
+        dkappa_ds = safe_power_divide(dkappa_dt, speed, power=1, epsilon=self.config.numerical_tolerance)
 
         return dkappa_ds
 
@@ -546,18 +585,25 @@ class AnalyticGradientCalculator:
         # 数值梯度
         numerical_grad = np.zeros(n * 2)
 
-        # 计算当前成本
-        from .curvature_cost_module import CurvatureCostModule
-        cost_module = CurvatureCostModule(self.config)
+        # 检查依赖是否设置
+        if not self.cost_calculators:
+            raise DependencyInjectionError(
+                "成本计算器未设置。请确保：\n"
+                "1. 在构造时传入 cost_calculators 参数，或\n"
+                "2. 调用 set_cost_calculators() 方法设置依赖"
+            )
 
+        # 计算当前成本
         def compute_total_cost(cp):
             cost = 0.0
-            if weights.curvature_squared > 0:
-                cost += weights.curvature_squared * cost_module.compute_curvature_squared_cost(cp)
-            if weights.curvature_derivative > 0:
-                cost += weights.curvature_derivative * cost_module.compute_curvature_derivative_cost(cp)
-            if weights.curvature_peak > 0:
-                cost += weights.curvature_peak * cost_module.compute_curvature_peak_cost(cp)
+            for i, calculator in enumerate(self.cost_calculators):
+                # 根据索引确定权重
+                if i == 0 and weights.curvature_squared > 0:
+                    cost += weights.curvature_squared * calculator.compute_cost(cp)
+                elif i == 1 and weights.curvature_derivative > 0:
+                    cost += weights.curvature_derivative * calculator.compute_cost(cp)
+                elif i == 2 and weights.curvature_peak > 0:
+                    cost += weights.curvature_peak * calculator.compute_cost(cp)
             return cost
 
         cost_current = compute_total_cost(control_points)

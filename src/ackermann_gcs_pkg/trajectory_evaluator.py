@@ -18,24 +18,19 @@ from .ackermann_data_structures import (
 )
 from .flat_output_mapper import compute_flat_output_mapping
 
-
-# === 约束违反阈值常量 ===
-# 用于判断约束是否违反的阈值
-
-VELOCITY_VIOLATION_THRESHOLD: float = 1e-2  # 速度约束违反阈值 (m/s)
-ACCELERATION_VIOLATION_THRESHOLD: float = 1e-4  # 加速度约束违反阈值 (m/s²)
-CURVATURE_VIOLATION_THRESHOLD: float = 1e-4  # 曲率约束违反阈值 (1/m)
-
-# === 采样参数常量 ===
-# 用于轨迹评估、曲率计算等过程中的采样
-
-DEFAULT_NUM_SAMPLES: int = 100  # 轨迹评估默认采样点数
-DEFAULT_CONTINUITY_SAMPLES: int = 11  # 连续性检查默认采样点数
-
-# === 数值容差常量 ===
-# 用于数值计算中的容差判断
-
-DEFAULT_CONTINUITY_TOLERANCE: float = 1e-3  # 连续性检查默认容差
+# 导入新的工具模块
+from .constants import (
+    VELOCITY_VIOLATION_THRESHOLD,
+    ACCELERATION_VIOLATION_THRESHOLD,
+    CURVATURE_VIOLATION_THRESHOLD,
+    DEFAULT_NUM_SAMPLES,
+    DEFAULT_CONTINUITY_SAMPLES,
+    DEFAULT_CONTINUITY_TOLERANCE,
+)
+from .constraint_utils import (
+    compute_constraint_violation,
+    identify_violation_points,
+)
 
 
 class TrajectoryEvaluator:
@@ -93,20 +88,17 @@ class TrajectoryEvaluator:
         mapping = compute_flat_output_mapping(trajectory, self.vehicle_params, num_samples)
         velocity = mapping["velocity"]
 
-        # 计算违反量
-        violation = np.maximum(0, velocity - self.constraints.max_velocity)
+        # 计算违反量 - 使用新的工具函数
+        violation = compute_constraint_violation(velocity, self.constraints.max_velocity, use_absolute=False)
 
-        # 找出违反点
-        violation_points = []
-        for i, v in enumerate(violation):
-            if v > VELOCITY_VIOLATION_THRESHOLD:  # 放宽阈值到1e-2，因为速度约束是分量约束，不是模长约束
-                violation_points.append(i / (num_samples - 1))
+        # 找出违反点 - 使用新的工具函数
+        violation_points, _ = identify_violation_points(violation, VELOCITY_VIOLATION_THRESHOLD, num_samples)
 
         max_violation = np.max(violation) if len(violation) > 0 else 0.0
 
         return ConstraintViolation(
             constraint_name="velocity",
-            is_violated=max_violation > VELOCITY_VIOLATION_THRESHOLD,  # 放宽阈值到1e-2
+            is_violated=max_violation > VELOCITY_VIOLATION_THRESHOLD,
             max_violation=max_violation,
             violation_points=violation_points,
         )
@@ -130,20 +122,17 @@ class TrajectoryEvaluator:
         mapping = compute_flat_output_mapping(trajectory, self.vehicle_params, num_samples)
         acceleration = mapping["acceleration"]
 
-        # 计算违反量
-        violation = np.maximum(0, np.abs(acceleration) - self.constraints.max_acceleration)
+        # 计算违反量 - 使用新的工具函数
+        violation = compute_constraint_violation(acceleration, self.constraints.max_acceleration, use_absolute=True)
 
-        # 找出违反点
-        violation_points = []
-        for i, v in enumerate(violation):
-            if v > ACCELERATION_VIOLATION_THRESHOLD:  # 放宽阈值到1e-4
-                violation_points.append(i / (num_samples - 1))
+        # 找出违反点 - 使用新的工具函数
+        violation_points, _ = identify_violation_points(violation, ACCELERATION_VIOLATION_THRESHOLD, num_samples)
 
         max_violation = np.max(violation) if len(violation) > 0 else 0.0
 
         return ConstraintViolation(
             constraint_name="acceleration",
-            is_violated=max_violation > ACCELERATION_VIOLATION_THRESHOLD,  # 放宽阈值到1e-4
+            is_violated=max_violation > ACCELERATION_VIOLATION_THRESHOLD,
             max_violation=max_violation,
             violation_points=violation_points,
         )
@@ -167,20 +156,17 @@ class TrajectoryEvaluator:
         mapping = compute_flat_output_mapping(trajectory, self.vehicle_params, num_samples)
         curvature = mapping["curvature"]
 
-        # 计算违反量
-        violation = np.maximum(0, np.abs(curvature) - self.constraints.max_curvature)
+        # 计算违反量 - 使用新的工具函数
+        violation = compute_constraint_violation(curvature, self.constraints.max_curvature, use_absolute=True)
 
-        # 找出违反点
-        violation_points = []
-        for i, v in enumerate(violation):
-            if v > CURVATURE_VIOLATION_THRESHOLD:  # 放宽阈值到1e-4
-                violation_points.append(i / (num_samples - 1))
+        # 找出违反点 - 使用新的工具函数
+        violation_points, _ = identify_violation_points(violation, CURVATURE_VIOLATION_THRESHOLD, num_samples)
 
         max_violation = np.max(violation) if len(violation) > 0 else 0.0
 
         return ConstraintViolation(
             constraint_name="curvature",
-            is_violated=max_violation > CURVATURE_VIOLATION_THRESHOLD,  # 放宽阈值到1e-4
+            is_violated=max_violation > CURVATURE_VIOLATION_THRESHOLD,
             max_violation=max_violation,
             violation_points=violation_points,
         )

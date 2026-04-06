@@ -466,3 +466,35 @@ class CurvaturePeakCost:
             constraints.append((-kappa, -jacobian))
 
         return constraints
+    
+    # ========== CostCalculatorInterface 接口实现 ==========
+    
+    def compute_cost(self, control_points: np.ndarray) -> float:
+        """
+        计算曲率峰值惩罚成本（接口方法）
+        
+        实现 CostCalculatorInterface 接口
+        
+        Args:
+            control_points: 贝塞尔曲线控制点，形状(n, 2)
+            
+        Returns:
+            成本值
+        """
+        return self.compute_curvature_peak_cost(control_points)
+    
+    def compute_cost_gradient(self, control_points: np.ndarray) -> np.ndarray:
+        """
+        计算成本对控制点的梯度（接口方法）
+        
+        实现 CostCalculatorInterface 接口
+        
+        Args:
+            control_points: 控制点数组，形状(n, 2)
+            
+        Returns:
+            梯度数组，形状(n * 2,)
+        """
+        gradient_2d = self.compute_gradient(control_points)
+        # 将 (n, 2) 形状转换为 (n*2,) 形状
+        return gradient_2d.flatten()

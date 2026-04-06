@@ -38,16 +38,10 @@ from .scp_optimization import (
     ConstraintViolationCalculator,
 )
 
-
-# === 数值容差常量 ===
-# 用于数值计算中的容差判断，避免浮点数精度问题
-
-NUMERICAL_TOLERANCE: float = 1e-10  # 通用数值计算容差，用于避免除零
-
-# === 采样参数常量 ===
-# 用于轨迹评估、曲率计算等过程中的采样
-
-DEFAULT_NUM_SAMPLES: int = 100  # 轨迹评估默认采样点数
+# 导入新的工具模块
+from .constants import NUMERICAL_TOLERANCE, DEFAULT_NUM_SAMPLES, DEFAULT_LINEARIZATION_SAMPLES
+from .trajectory_utils import generate_sample_times, compute_derivatives
+from .curvature_utils import compute_curvature, compute_curvature_gradient
 DEFAULT_LINEARIZATION_SAMPLES: int = 50  # 曲率线性化默认采样点数
 
 
@@ -164,8 +158,8 @@ class AckermannSCPSolver:
         Returns:
             线性约束列表
         """
-        # 采样时间点
-        t_samples = np.linspace(trajectory.start_time(), trajectory.end_time(), num_samples)
+        # 采样时间点 - 使用新的工具函数
+        t_samples = generate_sample_times(trajectory, num_samples)
 
         # 计算当前曲率κ₀和梯度∇κ
         curvature_list = []
@@ -175,45 +169,25 @@ class AckermannSCPSolver:
         grad_y_ddot_list = []
 
         for t in t_samples:
-            # 计算一阶和二阶导数
-            first_deriv = trajectory.EvalDerivative(t, 1)  # (2,)
-            second_deriv = trajectory.EvalDerivative(t, 2)  # (2,)
+            # 计算一阶和二阶导数 - 使用新的工具函数
+            _, first_deriv, second_deriv = compute_derivatives(trajectory, t, order=2)
 
             x_dot = first_deriv[0]
             y_dot = first_deriv[1]
             x_ddot = second_deriv[0]
             y_ddot = second_deriv[1]
 
-            # 计算当前曲率κ₀
-            denominator = (x_dot**2 + y_dot**2) ** 1.5
-            if denominator < NUMERICAL_TOLERANCE:
-                denominator = 1.0
-            numerator = x_dot * y_ddot - y_dot * x_ddot
-            curvature = numerator / denominator
+            # 计算当前曲率κ₀ - 使用新的工具函数
+            curvature = compute_curvature(x_dot, y_dot, x_ddot, y_ddot, epsilon=NUMERICAL_TOLERANCE)
             curvature_list.append(curvature)
 
-            # 计算曲率梯度∇κ = [∂κ/∂x', ∂κ/∂y', ∂κ/∂x'', ∂κ/∂y'']
-            # ∂κ/∂x' = (3 * x' * y' * (y' * x'' - x' * y'')) / (x'^2 + y'^2)^(5/2)
-            # ∂κ/∂y' = (3 * x' * y' * (x' * y'' - y' * x'')) / (x'^2 + y'^2)^(5/2)
-            # ∂κ/∂x'' = -y' / (x'^2 + y'^2)^(3/2)
-            # ∂κ/∂y'' = x' / (x'^2 + y'^2)^(3/2)
+            # 计算曲率梯度∇κ - 使用新的工具函数
+            grad = compute_curvature_gradient(x_dot, y_dot, x_ddot, y_ddot, epsilon=NUMERICAL_TOLERANCE)
 
-            denom_1_5 = (x_dot**2 + y_dot**2) ** 2.5
-            if denom_1_5 < NUMERICAL_TOLERANCE:
-                denom_1_5 = 1.0
-            denom_0_5 = (x_dot**2 + y_dot**2) ** 0.5
-            if denom_0_5 < NUMERICAL_TOLERANCE:
-                denom_0_5 = 1.0
-
-            dk_dx_dot = (3 * x_dot * y_dot * (y_dot * x_ddot - x_dot * y_ddot)) / denom_1_5
-            dk_dy_dot = (3 * x_dot * y_dot * (x_dot * y_ddot - y_dot * x_ddot)) / denom_1_5
-            dk_dx_ddot = -y_dot / denom_0_5
-            dk_dy_ddot = x_dot / denom_0_5
-
-            grad_x_dot_list.append(dk_dx_dot)
-            grad_y_dot_list.append(dk_dy_dot)
-            grad_x_ddot_list.append(dk_dx_ddot)
-            grad_y_ddot_list.append(dk_dy_ddot)
+            grad_x_dot_list.append(grad.dk_dx_dot)
+            grad_y_dot_list.append(grad.dk_dy_dot)
+            grad_x_ddot_list.append(grad.dk_dx_ddot)
+            grad_y_ddot_list.append(grad.dk_dy_ddot)
 
         # 构建线性约束
         constraints = []
@@ -351,27 +325,22 @@ class AckermannSCPSolver:
         Returns:
             最大违反量
         """
-        # 采样时间点
-        t_samples = np.linspace(trajectory.start_time(), trajectory.end_time(), num_samples)
+        # 采样时间点 - 使用新的工具函数
+        t_samples = generate_sample_times(trajectory, num_samples)
 
         # 计算曲率
         curvature_list = []
         for t in t_samples:
-            # 计算一阶和二阶导数
-            first_deriv = trajectory.EvalDerivative(t, 1)  # (2,)
-            second_deriv = trajectory.EvalDerivative(t, 2)  # (2,)
+            # 计算一阶和二阶导数 - 使用新的工具函数
+            _, first_deriv, second_deriv = compute_derivatives(trajectory, t, order=2)
 
             x_dot = first_deriv[0]
             y_dot = first_deriv[1]
             x_ddot = second_deriv[0]
             y_ddot = second_deriv[1]
 
-            # 计算曲率
-            denominator = (x_dot**2 + y_dot**2) ** 1.5
-            if denominator < NUMERICAL_TOLERANCE:
-                denominator = 1.0
-            numerator = x_dot * y_ddot - y_dot * x_ddot
-            curvature = numerator / denominator
+            # 计算曲率 - 使用新的工具函数
+            curvature = compute_curvature(x_dot, y_dot, x_ddot, y_ddot, epsilon=NUMERICAL_TOLERANCE)
             curvature_list.append(curvature)
 
         curvature = np.array(curvature_list)
