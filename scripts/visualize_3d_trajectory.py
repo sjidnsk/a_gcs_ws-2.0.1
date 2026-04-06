@@ -10,7 +10,7 @@ import sys
 
 # 路径设置 - 必须在所有导入之前
 current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(os.path.dirname(current_dir))  # 从tests/unit回到项目根目录
+project_root = os.path.dirname(current_dir)  # 从scripts回到项目根目录
 src_dir = os.path.join(project_root, 'src')
 
 # 移除空字符串(如果存在)
@@ -28,15 +28,16 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from typing import Optional, List, Tuple
 
-from tests.unit.test_hybrid_astar_gcs_planner import create_test_map
-from tests.unit.hybrid_astar_gcs_planner import (
+# from scripts.test_hybrid_astar_gcs_planner import 
+from scripts.hybrid_astar_gcs_planner import (
     SCENARIO_CONFIGS, 
     convert_iris_to_hpolyhedron, create_endpoint_state,
     DEFAULT_VEHICLE_PARAMS,
-    plan_path
+    plan_path,
+    create_test_map
 )
 from C_space_pkg.se2 import SE2ConfigurationSpace
-from hybrid_astar_gcs_planner import HybridAStarGCSPlanner
+from path_planner.scripts.hybrid_astar_gcs_planner import HybridAStarGCSPlanner
 from path_planner.scripts.planner_support import PlannerConfig
 # from tests.unit.test_hybrid_astar_gcs_planner import plan_path
 from ackermann_gcs_pkg.ackermann_gcs_planner import AckermannGCSPlanner

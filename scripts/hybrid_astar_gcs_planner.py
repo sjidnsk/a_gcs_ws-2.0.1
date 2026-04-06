@@ -39,8 +39,8 @@ sys.path.insert(2, ackermann_pkg_dir)
 
 from C_space_pkg.se2 import SE2ConfigurationSpace, create_rectangle_robot
 from A_pkg.A_star_fast_optimized import FastSE2AStarPlanner, PlannerConfig as AStarPlannerConfig
-from hybrid_astar_gcs_planner import HybridAStarGCSPlanner
-from planner_support import PlannerConfig
+from path_planner.scripts.hybrid_astar_gcs_planner import HybridAStarGCSPlanner
+from path_planner.scripts.planner_support import PlannerConfig
 
 # 导入 ackermann_gcs_pkg 模块
 from ackermann_gcs_pkg.ackermann_gcs_planner import AckermannGCSPlanner
