@@ -29,6 +29,12 @@ except ImportError:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from se2 import SE2ConfigurationSpace, RobotShape
 
+
+# === 数值容差常量 ===
+# 用于数值计算中的容差判断
+
+NUMERICAL_TOLERANCE: float = 1e-6  # 通用数值计算容差
+
 # 尝试导入A*规划器
 try:
     # 添加A*模块路径
@@ -300,7 +306,7 @@ class CorridorGenerator:
 
         half_width = width_pixels / 2
 
-        if length < 1e-6:
+        if length < NUMERICAL_TOLERANCE:
             # 起点和终点重合,生成圆形区域（局部计算）
             margin = int(half_width) + 2
             x_min = max(0, int(gx1) - margin)

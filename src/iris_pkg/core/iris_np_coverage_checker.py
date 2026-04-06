@@ -16,6 +16,19 @@ from .iris_np_collision import SimpleCollisionCheckerForIrisNp
 from .iris_np_expansion import IrisNpExpansion
 
 
+# === 数值容差常量 ===
+# 用于数值计算中的容差判断
+
+CONSTRAINT_CONTAINMENT_TOL: float = 1e-6  # 点在区域内判断的容差
+
+# === 几何参数常量 ===
+# 用于区域尺寸和距离计算
+
+DEFAULT_CLUSTER_DISTANCE: float = 2.0  # 默认聚类距离 (m)
+MIN_INITIAL_REGION_SIZE: float = 0.05  # 最小初始区域尺寸 (m)
+MAX_REGION_SIZE_LIMIT: float = 20.0  # 最大区域尺寸限制 (m)
+
+
 class IrisNpCoverageChecker:
     """IrisNp 路径覆盖验证器"""
 
@@ -63,7 +76,7 @@ class IrisNpCoverageChecker:
 
             # 检查点是否在任何区域内
             for region in regions:
-                if region.contains(point, tol=1e-6):
+                if region.contains(point, tol=CONSTRAINT_CONTAINMENT_TOL):
                     is_covered = True
                     break
 
@@ -103,7 +116,7 @@ class IrisNpCoverageChecker:
 
             # 检查点是否在任何区域内
             for region in regions:
-                if region.contains(point, tol=1e-6):
+                if region.contains(point, tol=CONSTRAINT_CONTAINMENT_TOL):
                     is_covered = True
                     break
 
@@ -143,7 +156,7 @@ class IrisNpCoverageChecker:
 
         # 对未覆盖点进行聚类,避免生成过多重叠区域
         # 使用简单的距离聚类
-        clusters = self._cluster_uncovered_points(path, uncovered_indices, cluster_distance=2.0)
+        clusters = self._cluster_uncovered_points(path, uncovered_indices, cluster_distance=DEFAULT_CLUSTER_DISTANCE)
 
         if self.config.verbose:
             print(f"  未覆盖点聚类为 {len(clusters)} 个簇")
@@ -186,8 +199,8 @@ class IrisNpCoverageChecker:
                     original_max_size = self.config.max_region_size
 
                     # 使用更小的初始区域(0.05米)和更小的最大区域(20米)
-                    self.config.initial_region_size = 0.05
-                    self.config.max_region_size = 20.0
+                    self.config.initial_region_size = MIN_INITIAL_REGION_SIZE
+                    self.config.max_region_size = MAX_REGION_SIZE_LIMIT
 
                     region = self.expansion.simplified_iris_with_sampling(
                         checker, seed_point, domain, obstacle_map, resolution, origin
@@ -218,7 +231,7 @@ class IrisNpCoverageChecker:
         self,
         path: List[Tuple[float, float, float]],
         uncovered_indices: List[int],
-        cluster_distance: float = 2.0
+        cluster_distance: float = DEFAULT_CLUSTER_DISTANCE
     ) -> List[List[int]]:
         """
         对未覆盖点进行聚类

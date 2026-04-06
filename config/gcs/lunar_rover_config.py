@@ -5,7 +5,7 @@
 """
 
 import numpy as np
-from typing import List, Optional
+from typing import List
 from dataclasses import dataclass
 
 # 导入求解器配置

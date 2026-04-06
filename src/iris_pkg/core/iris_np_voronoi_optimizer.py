@@ -17,6 +17,15 @@ from .iris_np_region_data import IrisNpRegion
 from .iris_np_coverage_checker import IrisNpCoverageChecker
 
 
+# === 数值容差常量 ===
+# 用于数值计算中的容差判断
+
+NUMERICAL_TOLERANCE: float = 1e-6  # 通用数值计算容差
+SMALL_TOLERANCE: float = 1e-8  # 小容差，用于叉积判断
+VERY_SMALL_TOLERANCE: float = 1e-12  # 极小容差，用于长度平方判断
+PERTURBATION_SCALE: float = 1e-6  # 扰动缩放因子
+
+
 class VoronoiSeedOptimizer:
     """基于Voronoi图的种子点优化器"""
     
@@ -150,9 +159,9 @@ class VoronoiSeedOptimizer:
             v2 = seeds_array[2] - seeds_array[0]
             cross = np.abs(v1[0] * v2[1] - v1[1] * v2[0])
             
-            if cross < 1e-8:
+            if cross < SMALL_TOLERANCE:
                 # 共线，添加微小扰动
-                noise = np.random.randn(len(seeds), 2) * 1e-6
+                noise = np.random.randn(len(seeds), 2) * PERTURBATION_SCALE
                 seeds_array += noise
         
         return Voronoi(seeds_array)
@@ -267,7 +276,7 @@ class VoronoiSeedOptimizer:
             line_vec = p2 - p1
             line_len_sq = np.dot(line_vec, line_vec)
 
-            if line_len_sq < 1e-12:
+            if line_len_sq < VERY_SMALL_TOLERANCE:
                 distances.append(np.linalg.norm(point - p1))
             else:
                 t = np.dot(point - p1, line_vec) / line_len_sq
@@ -292,7 +301,7 @@ class VoronoiSeedOptimizer:
         line_vec = p2 - p1
         line_len = np.linalg.norm(line_vec)
         
-        if line_len < 1e-6:
+        if line_len < NUMERICAL_TOLERANCE:
             return np.linalg.norm(point - p1)
         
         # 计算投影点
@@ -376,7 +385,7 @@ class VoronoiSeedOptimizer:
         for p1, p2 in path_segments:
             line_vec = p2 - p1
             line_len = np.linalg.norm(line_vec)
-            if line_len > 1e-6:
+            if line_len > NUMERICAL_TOLERANCE:
                 t = np.dot(vertex - p1, line_vec) / (line_len ** 2)
                 t = max(0, min(1, t))
                 path_positions.append(p1 + t * line_vec)
@@ -398,7 +407,7 @@ class VoronoiSeedOptimizer:
             for p1, p2 in path_segments:
                 line_vec = p2 - p1
                 line_len = np.linalg.norm(line_vec)
-                if line_len > 1e-6:
+                if line_len > NUMERICAL_TOLERANCE:
                     t = np.dot(seed - p1, line_vec) / (line_len ** 2)
                     t = max(0, min(1, t))
                     seed_positions.append(p1 + t * line_vec)
@@ -471,7 +480,7 @@ def compute_path_curvature(path: np.ndarray, index: int) -> float:
     norm1 = np.linalg.norm(v1)
     norm2 = np.linalg.norm(v2)
 
-    if norm1 < 1e-6 or norm2 < 1e-6:
+    if norm1 < NUMERICAL_TOLERANCE or norm2 < NUMERICAL_TOLERANCE:
         return 0.0
 
     # 计算转角角度

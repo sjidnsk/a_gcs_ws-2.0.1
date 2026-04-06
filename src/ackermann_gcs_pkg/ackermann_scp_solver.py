@@ -39,6 +39,18 @@ from .scp_optimization import (
 )
 
 
+# === 数值容差常量 ===
+# 用于数值计算中的容差判断，避免浮点数精度问题
+
+NUMERICAL_TOLERANCE: float = 1e-10  # 通用数值计算容差，用于避免除零
+
+# === 采样参数常量 ===
+# 用于轨迹评估、曲率计算等过程中的采样
+
+DEFAULT_NUM_SAMPLES: int = 100  # 轨迹评估默认采样点数
+DEFAULT_LINEARIZATION_SAMPLES: int = 50  # 曲率线性化默认采样点数
+
+
 class AckermannSCPSolver:
     """
     序列凸规划（SCP）求解器
@@ -127,13 +139,13 @@ class AckermannSCPSolver:
             self.violation_calculator = ConstraintViolationCalculator(
                 evaluator=evaluator,
                 constraints=constraints,
-                num_samples=100
+                num_samples=DEFAULT_NUM_SAMPLES
             )
 
     def _linearize_curvature_constraint(
         self,
         trajectory: BsplineTrajectory,
-        num_samples: int = 50,
+        num_samples: int = DEFAULT_LINEARIZATION_SAMPLES,
     ) -> List[LinearConstraint]:
         """
         线性化曲率约束
@@ -174,8 +186,7 @@ class AckermannSCPSolver:
 
             # 计算当前曲率κ₀
             denominator = (x_dot**2 + y_dot**2) ** 1.5
-            epsilon = 1e-10
-            if denominator < epsilon:
+            if denominator < NUMERICAL_TOLERANCE:
                 denominator = 1.0
             numerator = x_dot * y_ddot - y_dot * x_ddot
             curvature = numerator / denominator
@@ -188,10 +199,10 @@ class AckermannSCPSolver:
             # ∂κ/∂y'' = x' / (x'^2 + y'^2)^(3/2)
 
             denom_1_5 = (x_dot**2 + y_dot**2) ** 2.5
-            if denom_1_5 < epsilon:
+            if denom_1_5 < NUMERICAL_TOLERANCE:
                 denom_1_5 = 1.0
             denom_0_5 = (x_dot**2 + y_dot**2) ** 0.5
-            if denom_0_5 < epsilon:
+            if denom_0_5 < NUMERICAL_TOLERANCE:
                 denom_0_5 = 1.0
 
             dk_dx_dot = (3 * x_dot * y_dot * (y_dot * x_ddot - x_dot * y_ddot)) / denom_1_5
@@ -328,7 +339,7 @@ class AckermannSCPSolver:
     def _compute_curvature_violation(
         self,
         trajectory: BsplineTrajectory,
-        num_samples: int = 100,
+        num_samples: int = DEFAULT_NUM_SAMPLES,
     ) -> float:
         """
         计算曲率约束的最大违反量
@@ -357,8 +368,7 @@ class AckermannSCPSolver:
 
             # 计算曲率
             denominator = (x_dot**2 + y_dot**2) ** 1.5
-            epsilon = 1e-10
-            if denominator < epsilon:
+            if denominator < NUMERICAL_TOLERANCE:
                 denominator = 1.0
             numerator = x_dot * y_ddot - y_dot * x_ddot
             curvature = numerator / denominator

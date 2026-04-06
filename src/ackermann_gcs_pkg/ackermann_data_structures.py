@@ -20,6 +20,46 @@ import numpy as np
 import time
 
 
+# === 约束违反阈值常量 ===
+# 用于判断约束是否违反的阈值
+
+VELOCITY_VIOLATION_THRESHOLD: float = 1e-2  # 速度约束违反阈值 (m/s)
+ACCELERATION_VIOLATION_THRESHOLD: float = 1e-4  # 加速度约束违反阈值 (m/s²)
+CURVATURE_VIOLATION_THRESHOLD: float = 1e-4  # 曲率约束违反阈值 (1/m)
+
+# === 收敛与终止阈值常量 ===
+# 用于SCP迭代收敛判断
+
+DEFAULT_CONVERGENCE_TOLERANCE: float = 1e-3  # 默认收敛容差
+DEFAULT_STAGNATION_THRESHOLD: float = 0.01  # 改进停滞阈值
+DEFAULT_MIN_TRUST_REGION: float = 1e-6  # 最小信任区域半径
+
+# === 迭代参数常量 ===
+# 用于SCP迭代、优化算法等
+
+DEFAULT_MAX_ITERATIONS: int = 10  # SCP默认最大迭代次数
+DEFAULT_STAGNATION_WINDOW: int = 5  # 停滞检测窗口大小
+DEFAULT_MAX_SHRINK_COUNT: int = 3  # 最大连续缩小次数
+
+# === 信任区域参数常量 ===
+# 用于信任区域调整策略
+
+DEFAULT_TRUST_REGION_RADIUS: float = 1.0  # 默认初始信任区域半径
+TRUST_REGION_EXPAND_FACTOR: float = 2.0  # 信任区域扩大因子
+TRUST_REGION_SHRINK_FACTOR: float = 0.5  # 信任区域缩小因子
+AGGRESSIVE_SHRINK_FACTOR: float = 0.25  # 激进缩小因子
+
+# === 采样参数常量 ===
+# 用于轨迹评估、曲率计算等过程中的采样
+
+DEFAULT_BATCH_SIZE: int = 20  # 并行处理默认批次大小
+
+# === 数值容差常量 ===
+# 用于数值计算中的容差判断
+
+SMALL_EPSILON: float = 1e-6  # 小量容差，用于判断向量是否为零
+
+
 @dataclass
 class VehicleParams:
     """
@@ -229,17 +269,17 @@ class TerminationConfig:
         acceleration_severe_threshold: 加速度严重违反阈值（新增）
         curvature_severe_threshold: 曲率严重违反阈值（新增）
     """
-    convergence_tolerance: float = 1e-3
-    stagnation_threshold: float = 0.01
-    stagnation_window: int = 5
+    convergence_tolerance: float = DEFAULT_CONVERGENCE_TOLERANCE
+    stagnation_threshold: float = DEFAULT_STAGNATION_THRESHOLD
+    stagnation_window: int = DEFAULT_STAGNATION_WINDOW
     oscillation_threshold: float = 0.1
     engineering_tolerance_factor: float = 10.0
     min_iteration_ratio: float = 0.3
-    min_delta: float = 1e-6
-    max_shrink_count: int = 3
+    min_delta: float = DEFAULT_MIN_TRUST_REGION
+    max_shrink_count: int = DEFAULT_MAX_SHRINK_COUNT
     enable_early_termination: bool = True
     # 新增字段（带默认值，向后兼容）
-    velocity_threshold: float = 1e-2
+    velocity_threshold: float = VELOCITY_VIOLATION_THRESHOLD
     acceleration_threshold: float = 1.0
     velocity_severe_threshold: float = 1.0
     acceleration_severe_threshold: float = 10.0
@@ -297,7 +337,7 @@ class ParallelConfig:
         enable_parallel: 是否启用并行计算
     """
     num_processes: Optional[int] = None
-    batch_size: int = 20
+    batch_size: int = DEFAULT_BATCH_SIZE
     enable_batching: bool = True
     enable_parallel: bool = True
     
@@ -429,9 +469,9 @@ class ConstraintThresholds:
         acceleration_severe_threshold: 加速度严重违反阈值
         curvature_severe_threshold: 曲率严重违反阈值
     """
-    velocity_threshold: float = 1e-2
+    velocity_threshold: float = VELOCITY_VIOLATION_THRESHOLD
     acceleration_threshold: float = 1.0
-    curvature_threshold: float = 1e-3
+    curvature_threshold: float = DEFAULT_CONVERGENCE_TOLERANCE
     velocity_severe_threshold: float = 1.0
     acceleration_severe_threshold: float = 10.0
     curvature_severe_threshold: float = 0.1
@@ -507,12 +547,12 @@ class SCPConfig:
         enable_parallel_linearization: 是否启用并行线性化
         enable_performance_stats: 是否启用性能统计
     """
-    max_iterations: int = 10
-    convergence_tolerance: float = 1e-3
-    initial_trust_region_radius: float = 1.0
-    trust_region_shrink_factor: float = 0.5
-    trust_region_expand_factor: float = 2.0
-    min_trust_region_radius: float = 1e-6
+    max_iterations: int = DEFAULT_MAX_ITERATIONS
+    convergence_tolerance: float = DEFAULT_CONVERGENCE_TOLERANCE
+    initial_trust_region_radius: float = DEFAULT_TRUST_REGION_RADIUS
+    trust_region_shrink_factor: float = TRUST_REGION_SHRINK_FACTOR
+    trust_region_expand_factor: float = TRUST_REGION_EXPAND_FACTOR
+    min_trust_region_radius: float = DEFAULT_MIN_TRUST_REGION
     
     # 优化配置
     trust_region_config: Optional[TrustRegionConfig] = None
@@ -565,7 +605,7 @@ class BezierConfig:
     """
     order: int = 5
     continuity: int = 1
-    hdot_min: float = 1e-6
+    hdot_min: float = SMALL_EPSILON
     full_dim_overlap: bool = False
     hyperellipsoid_num_samples_per_dim_factor: int = 32
 

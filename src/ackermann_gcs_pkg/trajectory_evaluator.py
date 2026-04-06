@@ -19,6 +19,25 @@ from .ackermann_data_structures import (
 from .flat_output_mapper import compute_flat_output_mapping
 
 
+# === 约束违反阈值常量 ===
+# 用于判断约束是否违反的阈值
+
+VELOCITY_VIOLATION_THRESHOLD: float = 1e-2  # 速度约束违反阈值 (m/s)
+ACCELERATION_VIOLATION_THRESHOLD: float = 1e-4  # 加速度约束违反阈值 (m/s²)
+CURVATURE_VIOLATION_THRESHOLD: float = 1e-4  # 曲率约束违反阈值 (1/m)
+
+# === 采样参数常量 ===
+# 用于轨迹评估、曲率计算等过程中的采样
+
+DEFAULT_NUM_SAMPLES: int = 100  # 轨迹评估默认采样点数
+DEFAULT_CONTINUITY_SAMPLES: int = 11  # 连续性检查默认采样点数
+
+# === 数值容差常量 ===
+# 用于数值计算中的容差判断
+
+DEFAULT_CONTINUITY_TOLERANCE: float = 1e-3  # 连续性检查默认容差
+
+
 class TrajectoryEvaluator:
     """
     轨迹评估器
@@ -58,7 +77,7 @@ class TrajectoryEvaluator:
     def check_velocity_constraint(
         self,
         trajectory: BsplineTrajectory,
-        num_samples: int = 100,
+        num_samples: int = DEFAULT_NUM_SAMPLES,
     ) -> ConstraintViolation:
         """
         检查速度约束
@@ -80,14 +99,14 @@ class TrajectoryEvaluator:
         # 找出违反点
         violation_points = []
         for i, v in enumerate(violation):
-            if v > 1e-2:  # 放宽阈值到1e-2，因为速度约束是分量约束，不是模长约束
+            if v > VELOCITY_VIOLATION_THRESHOLD:  # 放宽阈值到1e-2，因为速度约束是分量约束，不是模长约束
                 violation_points.append(i / (num_samples - 1))
 
         max_violation = np.max(violation) if len(violation) > 0 else 0.0
 
         return ConstraintViolation(
             constraint_name="velocity",
-            is_violated=max_violation > 1e-2,  # 放宽阈值到1e-2
+            is_violated=max_violation > VELOCITY_VIOLATION_THRESHOLD,  # 放宽阈值到1e-2
             max_violation=max_violation,
             violation_points=violation_points,
         )
@@ -95,7 +114,7 @@ class TrajectoryEvaluator:
     def check_acceleration_constraint(
         self,
         trajectory: BsplineTrajectory,
-        num_samples: int = 100,
+        num_samples: int = DEFAULT_NUM_SAMPLES,
     ) -> ConstraintViolation:
         """
         检查加速度约束
@@ -117,14 +136,14 @@ class TrajectoryEvaluator:
         # 找出违反点
         violation_points = []
         for i, v in enumerate(violation):
-            if v > 1e-4:  # 放宽阈值到1e-4
+            if v > ACCELERATION_VIOLATION_THRESHOLD:  # 放宽阈值到1e-4
                 violation_points.append(i / (num_samples - 1))
 
         max_violation = np.max(violation) if len(violation) > 0 else 0.0
 
         return ConstraintViolation(
             constraint_name="acceleration",
-            is_violated=max_violation > 1e-4,  # 放宽阈值到1e-4
+            is_violated=max_violation > ACCELERATION_VIOLATION_THRESHOLD,  # 放宽阈值到1e-4
             max_violation=max_violation,
             violation_points=violation_points,
         )
@@ -132,7 +151,7 @@ class TrajectoryEvaluator:
     def check_curvature_constraint(
         self,
         trajectory: BsplineTrajectory,
-        num_samples: int = 100,
+        num_samples: int = DEFAULT_NUM_SAMPLES,
     ) -> ConstraintViolation:
         """
         检查曲率约束
@@ -154,14 +173,14 @@ class TrajectoryEvaluator:
         # 找出违反点
         violation_points = []
         for i, v in enumerate(violation):
-            if v > 1e-4:  # 放宽阈值到1e-4
+            if v > CURVATURE_VIOLATION_THRESHOLD:  # 放宽阈值到1e-4
                 violation_points.append(i / (num_samples - 1))
 
         max_violation = np.max(violation) if len(violation) > 0 else 0.0
 
         return ConstraintViolation(
             constraint_name="curvature",
-            is_violated=max_violation > 1e-4,  # 放宽阈值到1e-4
+            is_violated=max_violation > CURVATURE_VIOLATION_THRESHOLD,  # 放宽阈值到1e-4
             max_violation=max_violation,
             violation_points=violation_points,
         )
@@ -169,7 +188,7 @@ class TrajectoryEvaluator:
     def check_workspace_constraint(
         self,
         trajectory: BsplineTrajectory,
-        num_samples: int = 100,
+        num_samples: int = DEFAULT_NUM_SAMPLES,
     ) -> ConstraintViolation:
         """
         检查工作空间约束
@@ -223,8 +242,8 @@ class TrajectoryEvaluator:
         self,
         trajectory: BsplineTrajectory,
         order: int,
-        num_samples: int = 11,
-        tolerance: float = 1e-3,
+        num_samples: int = DEFAULT_CONTINUITY_SAMPLES,
+        tolerance: float = DEFAULT_CONTINUITY_TOLERANCE,
     ) -> ContinuityReport:
         """
         检查轨迹连续性

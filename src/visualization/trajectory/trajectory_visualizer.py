@@ -21,6 +21,13 @@ from scipy.spatial import ConvexHull
 from typing import List, Tuple, Optional, Any
 from ..core.output_manager import VisualizationOutputManager
 
+
+# === 数值容差常量 ===
+# 用于数值计算中的容差判断
+
+NUMERICAL_TOLERANCE: float = 1e-10  # 通用数值计算容差，用于避免除零
+POLYTOPE_TOLERANCE: float = 1e-9  # 多胞体转换容差
+
 # 设置全局字体为新罗马字体并放大
 plt.rcParams['font.family'] = 'serif'
 plt.rcParams['font.serif'] = ['Times New Roman'] + plt.rcParams['font.serif']
@@ -428,7 +435,7 @@ class TrajectoryVisualizer:
                     hpoly = region_3d.to_hpolyhedron()
                     
                     # 转换为VPolytope获取顶点
-                    vpoly = VPolytope(hpoly, tol=1e-9)
+                    vpoly = VPolytope(hpoly, tol=POLYTOPE_TOLERANCE)
                     vertices = vpoly.vertices()  # shape: (3, N)
                     
                     if vertices.shape[1] < 4:
@@ -804,7 +811,7 @@ class TrajectoryVisualizer:
             ax_accel = accelerations[0, :]
             ay_accel = accelerations[1, :]
 
-            omega = (vx * ay_accel - vy * ax_accel) / (vx**2 + vy**2 + 1e-10)
+            omega = (vx * ay_accel - vy * ax_accel) / (vx**2 + vy**2 + NUMERICAL_TOLERANCE)
             
             # 检查边界速度（验证zero_deriv_boundary效果）
             start_velocity = trajectory.EvalDerivative(trajectory.start_time(), 1)
@@ -900,7 +907,7 @@ class TrajectoryVisualizer:
 
             # 计算角速度
             v_squared = vx**2 + vy**2
-            omega = (vx * ay - vy * ax) / (v_squared + 1e-10)
+            omega = (vx * ay - vy * ax) / (v_squared + NUMERICAL_TOLERANCE)
 
             # 计算速度大小
             v_speed = np.sqrt(vx**2 + vy**2)

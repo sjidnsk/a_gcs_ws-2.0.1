@@ -16,6 +16,33 @@ from config.iris import IrisNpConfig
 from .iris_np_region_data import IrisNpRegion
 
 
+# === 数值容差常量 ===
+# 用于数值计算中的容差判断
+
+NUMERICAL_TOLERANCE: float = 1e-6  # 通用数值计算容差
+CONSTRAINT_CONTAINMENT_TOL: float = 1e-6  # 点在区域内判断的容差
+
+# === 采样参数常量 ===
+# 用于种子点提取过程中的采样
+
+DEFAULT_BATCH_SIZE: int = 20  # 并行处理默认批次大小
+
+# === 几何参数常量 ===
+# 用于种子点距离和密度计算
+
+DEFAULT_MIN_SEED_DISTANCE: float = 0.3  # 默认最小种子点距离 (m)
+RELAXED_MIN_DISTANCE: float = 0.8  # 放宽的最小距离阈值 (m)
+MIN_LOCAL_LENGTH: float = 0.1  # 最小局部长度 (m)
+
+# === 密度因子常量 ===
+# 用于平衡密度和覆盖
+
+DENSITY_BALANCE_FACTOR: float = 0.45  # 平衡密度和覆盖的因子
+HIGH_DENSITY_RATIO: float = 0.7  # 高密度比例阈值
+DENSE_ADAPTIVE_FACTOR: float = 0.85  # 密集区域自适应因子
+SPARSE_ADAPTIVE_FACTOR: float = 0.9  # 稀疏区域自适应因子
+
+
 class IrisNpSeedExtractor:
     """IrisNp 种子点提取器"""
 
@@ -89,7 +116,7 @@ class IrisNpSeedExtractor:
 
         # 优化1: 调整密度系数，平衡种子点密度和覆盖完整性
         # 从0.2改为0.45，减少约55%的种子点，提高效率
-        density_factor = 0.45  # 平衡密度和覆盖
+        density_factor = DENSITY_BALANCE_FACTOR  # 平衡密度和覆盖
 
         # 根据路径长度和最大种子点数计算采样间隔
         # 目标：均匀分布种子点，确保路径覆盖
@@ -190,7 +217,7 @@ class IrisNpSeedExtractor:
             is_covered = False
             for idx in nearby_indices:
                 region = existing_regions[idx]
-                if region.contains(point, tol=1e-6):
+                if region.contains(point, tol=CONSTRAINT_CONTAINMENT_TOL):
                     is_covered = True
                     break
 
@@ -229,7 +256,7 @@ class IrisNpSeedExtractor:
                         tangent = self._compute_path_tangent(path, i)
 
                         # 优化4: 使用放宽的距离限制（0.8米）
-                        if self._is_valid_seed_relaxed(point, [sp[0] for sp in seed_points], min_distance=0.8):
+                        if self._is_valid_seed_relaxed(point, [sp[0] for sp in seed_points], min_distance=RELAXED_MIN_DISTANCE):
                             seed_points.append((point, tangent))
 
         return seed_points
@@ -265,7 +292,7 @@ class IrisNpSeedExtractor:
         self,
         candidate: np.ndarray,
         existing: List[np.ndarray],
-        min_distance: float = 0.3
+        min_distance: float = DEFAULT_MIN_SEED_DISTANCE
     ) -> bool:
         """
         优化4: 放宽距离限制的种子点验证
@@ -340,7 +367,7 @@ class IrisNpSeedExtractor:
             is_covered = False
             for idx in nearby_indices:
                 region = existing_regions[idx]
-                if region.contains(neighbor, tol=1e-6):
+                if region.contains(neighbor, tol=CONSTRAINT_CONTAINMENT_TOL):
                     is_covered = True
                     break
 
@@ -396,23 +423,23 @@ class IrisNpSeedExtractor:
             local_length += np.sqrt((x1 - x0)**2 + (y1 - y0)**2)
 
         # 计算局部密度（点数/长度）
-        local_density = (end_idx - start_idx + 1) / max(local_length, 0.1)
+        local_density = (end_idx - start_idx + 1) / max(local_length, MIN_LOCAL_LENGTH)
 
         # 计算全局平均密度
-        global_density = len(path) / max(path_total_length, 0.1)
+        global_density = len(path) / max(path_total_length, MIN_LOCAL_LENGTH)
 
         # 根据密度比调整最小距离
         density_ratio = local_density / global_density
 
         if density_ratio > 1.5:
             # 密集区域：减小距离到85%（从70%改为85%，减少过度密集）
-            adaptive_distance = base_distance * 0.85
-        elif density_ratio < 0.7:
+            adaptive_distance = base_distance * DENSE_ADAPTIVE_FACTOR
+        elif density_ratio < HIGH_DENSITY_RATIO:
             # 稀疏区域：保持正常距离
             adaptive_distance = base_distance
         else:
             # 正常区域：略微减小距离到90%（从85%改为90%）
-            adaptive_distance = base_distance * 0.9
+            adaptive_distance = base_distance * SPARSE_ADAPTIVE_FACTOR
 
         return adaptive_distance
 
@@ -485,7 +512,7 @@ class IrisNpSeedExtractor:
 
         # 归一化
         norm = np.linalg.norm(tangent)
-        if norm > 1e-6:
+        if norm > NUMERICAL_TOLERANCE:
             tangent = tangent / norm
         else:
             tangent = np.array([1.0, 0.0])

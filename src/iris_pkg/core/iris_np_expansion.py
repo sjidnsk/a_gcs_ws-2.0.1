@@ -22,6 +22,22 @@ from .iris_np_utils import (
 )
 
 
+# === 膨胀参数常量 ===
+# 用于区域膨胀过程中的参数控制
+
+ELLIPSE_EXPANSION_SCALES: List[float] = [0.3, 0.2, 0.1, 0.05]  # 椭圆膨胀缩放因子列表
+CORNER_THRESHOLD: float = 0.5  # 角点检测阈值
+MAX_COLLISION_COUNT: int = 3  # 连续碰撞次数阈值，超过后认为该方向收敛
+MAX_CONVERGED_STABLE: int = 5  # 收敛方向数量稳定次数阈值
+MAX_ITERATIONS_LIMIT: int = 50  # 最大迭代次数上限
+CONVERGENCE_RATIO_THRESHOLD: float = 0.95  # 收敛比例阈值（达到最大尺寸的95%认为收敛）
+LARGE_SIZE_RATIO: float = 0.8  # 大尺寸比例阈值
+HIGH_CONVERGENCE_RATIO: float = 1.0  # 高收敛比例（100%）
+MEDIUM_CONVERGENCE_RATIO: float = 0.6  # 中等收敛比例（60%）
+MAX_RATIO_DEFAULT: float = 1.5  # 默认最大比例
+SHRINK_FACTOR_DEFAULT: float = 0.9  # 默认缩小因子
+
+
 class IrisNpExpansion:
     """区域膨胀算法基类"""
 
@@ -99,7 +115,7 @@ class IrisNpExpansion:
         from .iris_np_utils import check_region_collision_optimized
         if check_region_collision_optimized(self.config, checker, initial_region, resolution):
             # 尝试缩小初始区域
-            for scale in [0.3, 0.2, 0.1, 0.05]:
+            for scale in ELLIPSE_EXPANSION_SCALES:
                 test_distances = np.ones(num_directions) * initial_size * scale
                 test_region = self._create_region_from_directions(
                     seed_point, directions, test_distances, domain, seed_point
@@ -152,7 +168,7 @@ class IrisNpExpansion:
 
         # 改进1: 添加方向级别的收敛状态跟踪
         collision_counts = np.zeros(num_directions, dtype=int)  # 每个方向的连续碰撞次数
-        max_collision_count = 3  # 连续碰撞3次后认为该方向收敛
+        max_collision_count = MAX_COLLISION_COUNT  # 连续碰撞3次后认为该方向收敛
 
         # 如果提供了切线方向，应用各向异性膨胀（向量化）
         if tangent_direction is not None:
@@ -160,11 +176,11 @@ class IrisNpExpansion:
             step_sizes *= (1.0 + (self.config.tangent_normal_ratio - 1.0) * cos_angles)
 
         # 动态调整最大迭代次数
-        max_iterations = min(50, int(max_size / min_step) + 10)
+        max_iterations = min(MAX_ITERATIONS_LIMIT, int(max_size / min_step) + 10)
 
         # 改进2: 基于收敛方向比例的退出策略
         converged_stable_count = 0
-        max_converged_stable = 5  # 收敛方向数量稳定5次后退出
+        max_converged_stable = MAX_CONVERGED_STABLE  # 收敛方向数量稳定5次后退出
 
         for iteration in range(max_iterations):
             improved_count = 0
@@ -189,7 +205,7 @@ class IrisNpExpansion:
                 if new_distance > max_size:
                     new_distance = max_size
                     # 达到最大尺寸也算收敛
-                    if expansion_distances[i] >= max_size * 0.95:
+                    if expansion_distances[i] >= max_size * CONVERGENCE_RATIO_THRESHOLD:
                         collision_counts[i] = max_collision_count
                         converged_count += 1
                         continue
@@ -212,11 +228,11 @@ class IrisNpExpansion:
                     collision_counts[i] = 0  # 重置碰撞计数
 
                     # 如果接近最大尺寸，减小步长
-                    if expansion_distances[i] > max_size * 0.8:
+                    if expansion_distances[i] > max_size * LARGE_SIZE_RATIO:
                         step_sizes[i] *= step_reduction
 
             # 改进6: 基于收敛方向比例的退出策略
-            if converged_count >= num_directions * 1.0:  # 100%的方向收敛
+            if converged_count >= num_directions * HIGH_CONVERGENCE_RATIO:  # 100%的方向收敛
                 converged_stable_count += 1
                 if converged_stable_count >= max_converged_stable:
                     if self.config.verbose:
@@ -226,7 +242,7 @@ class IrisNpExpansion:
                 converged_stable_count = 0
 
             # 改进7: 如果所有方向都无改进且大部分已收敛
-            if improved_count == 0 and converged_count >= num_directions * 0.6:
+            if improved_count == 0 and converged_count >= num_directions * MEDIUM_CONVERGENCE_RATIO:
                 if self.config.verbose:
                     print(f"    退出: 无改进且 {converged_count}/{num_directions} 方向已收敛")
                 break
@@ -562,7 +578,7 @@ class IrisNpExpansion:
         self,
         directions: np.ndarray,
         distances: np.ndarray,
-        max_ratio: float = 1.5,
+        max_ratio: float = MAX_RATIO_DEFAULT,
         iterations: int = 5
     ) -> np.ndarray:
         """
@@ -605,7 +621,7 @@ class IrisNpExpansion:
         distances: np.ndarray,
         seed_point: np.ndarray,
         checker: SimpleCollisionCheckerForIrisNp,
-        corner_threshold: float = 0.5
+        corner_threshold: float = CORNER_THRESHOLD
     ) -> np.ndarray:
         """
         检测夹角情况并处理
@@ -696,7 +712,7 @@ class IrisNpExpansion:
         seed_point: np.ndarray,
         checker: SimpleCollisionCheckerForIrisNp,
         window_size: int = 3,
-        shrink_factor: float = 0.9
+        shrink_factor: float = SHRINK_FACTOR_DEFAULT
     ) -> np.ndarray:
         """
         验证局部凸包的有效性

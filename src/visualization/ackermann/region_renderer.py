@@ -9,6 +9,13 @@ from typing import List, Optional, Tuple
 from pydrake.geometry.optimization import HPolyhedron
 
 
+# === 数值容差常量 ===
+# 用于数值计算中的容差判断
+
+CONSTRAINT_CONTAINMENT_TOL: float = 1e-6  # 点在区域内判断的容差
+NUMERICAL_TOLERANCE: float = 1e-10  # 通用数值计算容差，用于避免除零
+
+
 class RegionRenderer:
     """IRIS区域渲染器
     
@@ -182,7 +189,7 @@ class RegionRenderer:
                     
                     if point is not None:
                         # 检查点是否在区域内
-                        if np.all(A @ point <= b + 1e-6):
+                        if np.all(A @ point <= b + CONSTRAINT_CONTAINMENT_TOL):
                             boundary_points.append(point)
             
             if len(boundary_points) > 0:
@@ -259,7 +266,7 @@ class RegionRenderer:
             # 求解: a_i^T (center + t * direction) = b_i
             denom = np.dot(a_i, direction)
             
-            if abs(denom) < 1e-10:
+            if abs(denom) < NUMERICAL_TOLERANCE:
                 return None
             
             t = (b_i - np.dot(a_i, center)) / denom
