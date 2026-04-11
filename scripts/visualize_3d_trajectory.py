@@ -116,7 +116,13 @@ def visualize_3d_trajectory_interactive(
     planner = HybridAStarGCSPlanner(c_space, planner_config)
     result = planner.process(path)
     
-    workspace_regions = convert_iris_to_hpolyhedron(result.iris_np_result.regions)
+    # 获取IRIS结果（优先使用zo模式）
+    iris_result = result.iris_zo_result or result.iris_np_result
+    if not iris_result:
+        print("✗ IRIS分解失败")
+        return
+    
+    workspace_regions = convert_iris_to_hpolyhedron(iris_result.regions)
     print(f"✓ IRIS分解完成，区域数: {len(workspace_regions)}")
     
     # 5. AckermannGCS规划

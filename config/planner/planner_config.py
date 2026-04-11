@@ -231,6 +231,7 @@ class PlannerResult:
     corridor_result: Any = None  # CorridorResult
     convex_obstacles: List[List[Tuple[float, float]]] = field(default_factory=list)
     iris_np_result: Optional[Any] = None  # IRIS np模式结果
+    iris_zo_result: Optional[Any] = None  # IRIS zo模式结果
     gcs_trajectory: Optional[Any] = None
     gcs_waypoints: Optional[np.ndarray] = None
     gcs_sample_times: Optional[np.ndarray] = None  # 采样时间点

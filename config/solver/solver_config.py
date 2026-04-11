@@ -69,7 +69,7 @@ class SolverPerformanceProfile:
     presolve_level: int = 1            # 预处理级别(0-2)
     
     # 并行化
-    num_threads: int = 4               # 线程数
+    num_threads: int = 8               # 线程数
     
     # 输出控制
     verbose: bool = False              # 详细输出

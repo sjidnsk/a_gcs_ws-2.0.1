@@ -54,7 +54,7 @@ class IrisNpConfigOptimized:
     推荐值：与 num_collision_infeasible_samples 相同
     """
     
-    configuration_space_margin: float = 0.2
+    configuration_space_margin: float = 0.1
     """配置空间安全裕度（米）
     
     说明：区域与障碍物之间的最小距离

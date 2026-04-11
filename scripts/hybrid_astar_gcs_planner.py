@@ -9,8 +9,14 @@ import sys
 import numpy as np
 from typing import List, Tuple, Optional
 
-from pydrake.geometry.optimization import HPolyhedron
-from pydrake.trajectories import BsplineTrajectory
+try:
+    from pydrake.geometry.optimization import HPolyhedron
+    from pydrake.trajectories import BsplineTrajectory
+    DRAKE_AVAILABLE = True
+except ImportError:
+    DRAKE_AVAILABLE = False
+    HPolyhedron = None
+    BsplineTrajectory = None
 
 # 路径设置
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -70,9 +76,9 @@ DEFAULT_VEHICLE_PARAMS = VehicleParams(
 SCENARIO_CONFIGS = {
     'basic': {
         'map_size': 200,
-        'start': (5.0, 5.0, 0.0),
-        'goal': (18.0, 18.0, np.pi/4),
-        'corridor_width': 3.0
+        'start': (2.5, 18.4, 0.0),
+        'goal': (18.0, 19.5, 0.0),
+        'corridor_width': 100.0
     },
     'minimal': {
         'map_size': 100,
@@ -120,7 +126,7 @@ SCENARIO_CONFIGS = {
         'map_size': 250,
         'start': (1.5, 12.5, -np.pi/2),
         'goal': (23.0, 13.0, np.pi/2),
-        'corridor_width': 25.0
+        'corridor_width': 100.0
     },
     'complex': {
         'map_size': 500,
@@ -189,17 +195,24 @@ def convert_iris_to_hpolyhedron(iris_regions: List) -> List[HPolyhedron]:
     将IRIS区域转换为HPolyhedron
 
     Args:
-        iris_regions: IRIS区域列表
+        iris_regions: IRIS区域列表(支持iris_np和iriszo)
 
     Returns:
         HPolyhedron列表
     """
     workspace_regions = []
     for region in iris_regions:
-        # IRIS区域通常包含A和b矩阵，满足 Ax <= b
-        A = region.A
-        b = region.b
-        hpolyhedron = HPolyhedron(A, b)
+        # 检查是否是iriszo的区域(有polyhedron属性)
+        if hasattr(region, 'polyhedron'):
+            # iriszo区域:直接使用polyhedron
+            hpolyhedron = region.polyhedron
+        elif hasattr(region, 'A') and hasattr(region, 'b'):
+            # iris_np区域:从A和b构造HPolyhedron
+            A = region.A
+            b = region.b
+            hpolyhedron = HPolyhedron(A, b)
+        else:
+            raise ValueError(f"未知的IRIS区域类型: {type(region)}")
         workspace_regions.append(hpolyhedron)
     return workspace_regions
 

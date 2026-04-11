@@ -47,7 +47,7 @@ from planner_support import (
     GCSOptimizer
 )
 
-# IRIS模块导入（仅使用np模式）
+# IRIS模块导入（支持np和zo模式）
 IRIS_MODULES = {}
 try:
     from iris_pkg import IrisNpRegionGenerator, IrisNpConfig, check_drake_availability
@@ -59,6 +59,17 @@ try:
     }
 except ImportError:
     IRIS_MODULES['np'] = {'available': False}
+
+try:
+    from iriszo import IrisZoRegionGenerator, IrisZoConfig
+    IRIS_MODULES['zo'] = {
+        'available': True,
+        'Generator': IrisZoRegionGenerator,
+        'Config': IrisZoConfig,
+        'check': lambda: True  # iriszo不依赖drake
+    }
+except ImportError:
+    IRIS_MODULES['zo'] = {'available': False}
 
 
 def check_drake_availability():
@@ -140,59 +151,105 @@ class HybridAStarGCSPlanner:
         self.config.iris_mode = 'np'
     
     def _create_iris_generators(self):
-        """创建IRIS生成器 - 仅支持np模式"""
-        mode = 'np'  # 强制使用np模式
+        """创建IRIS生成器 - 支持np和zo模式"""
+        # 确定要使用的模式(优先zo,回退np)
+        mode = 'zo'  # 优先使用zo模式
         if not self.iris_mode_available.get(mode, False):
-            return
-            
+            mode = 'np'  # 回退到np模式
+            if not self.iris_mode_available.get(mode, False):
+                warnings.warn("没有可用的IRIS模式")
+                return
+
+        # 只创建实际要使用的模式
         mod = IRIS_MODULES[mode]
         ConfigClass = mod['Config']
         GeneratorClass = mod['Generator']
-        
-        # 优先使用优化配置
-        if self.config.iris_config is not None:
-            iris_config = self.config.iris_config
-            print(f"使用优化配置创建IRIS生成器（{mode}模式）")
-            
-            # 从优化配置中提取参数
-            common_params = {
-                'iteration_limit': iris_config.iteration_limit,
-                'termination_threshold': iris_config.termination_threshold,
-                'configuration_space_margin': iris_config.configuration_space_margin,
-                'min_seed_distance': iris_config.min_seed_distance,
-                'max_seed_points': iris_config.max_seed_points,
-                'merge_overlapping_regions': iris_config.merge_overlapping_regions,
-                'num_collision_infeasible_samples': iris_config.num_collision_infeasible_samples,
-                'num_additional_constraints_infeasible_samples': iris_config.num_additional_constraints_infeasible_samples,
-                'enable_collision_cache': iris_config.enable_collision_cache,
-                'collision_cache_size': iris_config.collision_cache_size,
-                'use_batch_collision_check': iris_config.use_batch_collision_check,
-                'enable_parallel_processing': iris_config.enable_parallel_processing,
-                'num_parallel_workers': iris_config.num_parallel_workers,
-                'adaptive_initial_step': iris_config.adaptive_initial_step,
-                'adaptive_min_step': iris_config.adaptive_min_step,
-                'adaptive_step_reduction': iris_config.adaptive_step_reduction,
-                'num_expansion_directions': iris_config.num_expansion_directions,
-                'enable_two_batch_expansion': iris_config.enable_two_batch_expansion,
-                'first_batch_seed_interval': iris_config.first_batch_seed_interval,
-                'tangent_normal_ratio': iris_config.tangent_normal_ratio,
-                'strict_coverage_check': iris_config.strict_coverage_check,
-                'enable_visualization': iris_config.enable_visualization,
-                'verbose': iris_config.verbose
-            }
-        else:
-            # 向后兼容：使用旧参数
-            print(f"使用传统参数创建IRIS生成器（{mode}模式）")
-            common_params = {
-                'iteration_limit': self.config.iris_iteration_limit,
-                'termination_threshold': self.config.iris_termination_threshold,
-                'configuration_space_margin': self.config.iris_configuration_space_margin,
-                'min_seed_distance': self.config.iris_min_seed_distance,
-                'max_seed_points': self.config.iris_max_seed_points,
-                'merge_overlapping_regions': self.config.iris_merge_overlapping,
-                'num_collision_infeasible_samples': self.config.iris_num_collision_infeasible_samples
-            }
-        
+
+        # 根据模式创建不同的配置
+        if mode == 'np':
+            # np模式配置
+            if self.config.iris_config is not None:
+                iris_config = self.config.iris_config
+                print(f"使用优化配置创建IRIS生成器（{mode}模式）")
+
+                # 从优化配置中提取参数
+                common_params = {
+                    'iteration_limit': iris_config.iteration_limit,
+                    'termination_threshold': iris_config.termination_threshold,
+                    'configuration_space_margin': iris_config.configuration_space_margin,
+                    'min_seed_distance': iris_config.min_seed_distance,
+                    'max_seed_points': iris_config.max_seed_points,
+                    'merge_overlapping_regions': iris_config.merge_overlapping_regions,
+                    'num_collision_infeasible_samples': iris_config.num_collision_infeasible_samples,
+                    'num_additional_constraints_infeasible_samples': iris_config.num_additional_constraints_infeasible_samples,
+                    'enable_collision_cache': iris_config.enable_collision_cache,
+                    'collision_cache_size': iris_config.collision_cache_size,
+                    'use_batch_collision_check': iris_config.use_batch_collision_check,
+                    'enable_parallel_processing': iris_config.enable_parallel_processing,
+                    'num_parallel_workers': iris_config.num_parallel_workers,
+                    'adaptive_initial_step': iris_config.adaptive_initial_step,
+                    'adaptive_min_step': iris_config.adaptive_min_step,
+                    'adaptive_step_reduction': iris_config.adaptive_step_reduction,
+                    'num_expansion_directions': iris_config.num_expansion_directions,
+                    'enable_two_batch_expansion': iris_config.enable_two_batch_expansion,
+                    'first_batch_seed_interval': iris_config.first_batch_seed_interval,
+                    'tangent_normal_ratio': iris_config.tangent_normal_ratio,
+                    'strict_coverage_check': iris_config.strict_coverage_check,
+                    'enable_visualization': iris_config.enable_visualization,
+                    'verbose': iris_config.verbose
+                }
+            else:
+                # 向后兼容：使用旧参数
+                print(f"使用传统参数创建IRIS生成器（{mode}模式）")
+                common_params = {
+                    'iteration_limit': self.config.iris_iteration_limit,
+                    'termination_threshold': self.config.iris_termination_threshold,
+                    'configuration_space_margin': self.config.iris_configuration_space_margin,
+                    'min_seed_distance': self.config.iris_min_seed_distance,
+                    'max_seed_points': self.config.iris_max_seed_points,
+                    'merge_overlapping_regions': self.config.iris_merge_overlapping,
+                    'num_collision_infeasible_samples': self.config.iris_num_collision_infeasible_samples
+                }
+
+        elif mode == 'zo':
+            # zo模式配置
+            if self.config.iris_config is not None:
+                iris_config = self.config.iris_config
+                print(f"使用优化配置创建IRIS生成器（{mode}模式）")
+
+                # zo模式使用不同的参数名,并设置更合理的默认值
+                common_params = {
+                    'iteration_limit': iris_config.iteration_limit,
+                    'termination_threshold': iris_config.termination_threshold,
+                    'configuration_space_margin': iris_config.configuration_space_margin,
+                    'num_samples_per_iteration': 100,
+                    'parallelism': iris_config.num_parallel_workers if hasattr(iris_config, 'num_parallel_workers') else 4,
+                    'enable_two_batch_expansion': iris_config.enable_two_batch_expansion,
+                    'strict_coverage_check': iris_config.strict_coverage_check,
+                    'verbose': iris_config.verbose,
+                    # 关键参数:增大初始椭球半径和调整终止条件
+                    'starting_ellipsoid_radius': 0.5,  # 从0.01增大到0.5
+                    'relative_termination_threshold': 0.001,  # 从0.01降低到0.001,更严格的终止条件
+                    # 新增终止条件参数
+                    'min_iterations': 2,  # 最小迭代次数
+                    'zero_collision_threshold': 2,  # 连续多少次碰撞比例为0才终止
+                }
+            else:
+                # 向后兼容：使用旧参数
+                print(f"使用传统参数创建IRIS生成器（{mode}模式）")
+                common_params = {
+                    'iteration_limit': self.config.iris_iteration_limit,
+                    'termination_threshold': self.config.iris_termination_threshold,
+                    'configuration_space_margin': self.config.iris_configuration_space_margin,
+                    'verbose': False,
+                    # 关键参数:增大初始椭球半径和调整终止条件
+                    'starting_ellipsoid_radius': 0.5,
+                    'relative_termination_threshold': 0.001,
+                    # 新增终止条件参数
+                    'min_iterations': 2,
+                    'zero_collision_threshold': 2,
+                }
+
         self.iris_generators[mode] = GeneratorClass(ConfigClass(**common_params))
     
     def process(self, path: List[Tuple[float, float, float]], 
@@ -283,8 +340,13 @@ class HybridAStarGCSPlanner:
     
     def _run_iris_decomposition(self, path: List[Tuple[float, float, float]], 
                                  result: PlannerResult):
-        """运行IRIS分解（仅使用np模式）"""
-        mode = 'np'  # 强制使用np模式
+        """运行IRIS分解（支持np和zo模式）"""
+        mode = 'zo'  # 优先使用zo模式，如果不可用则使用np模式
+        if not self.iris_mode_available.get(mode, False):
+            mode = 'np'  # 回退到np模式
+            if not self.iris_mode_available.get(mode, False):
+                warnings.warn("没有可用的IRIS模式")
+                return
         
         # 使用生成器方式
         generator = self.iris_generators.get(mode)
@@ -305,7 +367,10 @@ class HybridAStarGCSPlanner:
             )
             
             # 保存结果
-            result.iris_np_result = iris_result
+            if mode == 'np':
+                result.iris_np_result = iris_result
+            elif mode == 'zo':
+                result.iris_zo_result = iris_result
             
             result.used_iris = True
             result.iris_mode_used = mode
@@ -313,7 +378,11 @@ class HybridAStarGCSPlanner:
             # 统计
             if iris_result:
                 result.num_obstacles = iris_result.num_regions
-                result.total_vertices = sum(len(r.vertices) for r in iris_result.regions)
+                # 处理vertices可能为None的情况
+                result.total_vertices = sum(
+                    len(r.vertices) if r.vertices is not None else 0
+                    for r in iris_result.regions
+                )
                 result.obstacle_area = iris_result.total_area
             
         except Exception as e:
