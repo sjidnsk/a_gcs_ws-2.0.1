@@ -20,11 +20,11 @@ from .ackermann_data_structures import (
     SCPConfig,
     BezierConfig,
     PlanningResult,
-    CurvatureCostConfig,
-    CurvatureCostWeights,
+    # CurvatureCostConfig,  # [2025-04-06] 曲率成本功能暂时禁用
+    # CurvatureCostWeights,  # [2025-04-06] 曲率成本功能暂时禁用
 )
 from .trajectory_evaluator import TrajectoryEvaluator
-from .curvature_cost_module import CurvatureCostModule
+# from .curvature_cost_module import CurvatureCostModule  # [2025-04-06] 曲率成本功能暂时禁用
 from .curvature_statistics import CurvatureStatistics
 
 
@@ -187,22 +187,24 @@ class AckermannGCSPlanner:
             if verbose:
                 print(f"[Planner]   Energy cost weight: {cost_weights['energy']}")
 
-        # 新增：添加曲率惩罚成本
-        curvature_weights = CurvatureCostWeights(
-            curvature_squared=cost_weights.get("curvature_squared", 0.0),
-            curvature_derivative=cost_weights.get("curvature_derivative", 0.0),
-            curvature_peak=cost_weights.get("curvature_peak", 0.0)
-        )
-
-        if curvature_weights.is_enabled():
-            if verbose:
-                print("[Planner] Adding curvature penalty cost...")
-
-            curvature_cost_config = CurvatureCostConfig()
-            curvature_cost_module = CurvatureCostModule(curvature_cost_config)
-            curvature_cost_module.add_curvature_cost_to_gcs(
-                bezier_gcs, curvature_weights, verbose
-            )
+        # [2025-04-06] 曲率成本功能暂时禁用 - 开始
+        # # 新增：添加曲率惩罚成本
+        # curvature_weights = CurvatureCostWeights(
+        #     curvature_squared=cost_weights.get("curvature_squared", 0.0),
+        #     curvature_derivative=cost_weights.get("curvature_derivative", 0.0),
+        #     curvature_peak=cost_weights.get("curvature_peak", 0.0)
+        # )
+        #
+        # if curvature_weights.is_enabled():
+        #     if verbose:
+        #         print("[Planner] Adding curvature penalty cost...")
+        #
+        #     curvature_cost_config = CurvatureCostConfig()
+        #     curvature_cost_module = CurvatureCostModule(curvature_cost_config)
+        #     curvature_cost_module.add_curvature_cost_to_gcs(
+        #         bezier_gcs, curvature_weights, verbose
+        #     )
+        # [2025-04-06] 曲率成本功能暂时禁用 - 结束
 
         # 步骤6：初始化AckermannSCPSolver
         if verbose:

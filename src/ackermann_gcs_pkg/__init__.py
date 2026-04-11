@@ -20,18 +20,18 @@ if TYPE_CHECKING:
         PlanningResult,
         LinearizedCostCoefficients,
         CurvatureDerivatives,
-        CurvatureCostConfig,
-        CurvatureCostWeights,
+        # CurvatureCostConfig,  # [2025-04-06] 曲率成本功能暂时禁用
+        # CurvatureCostWeights,  # [2025-04-06] 曲率成本功能暂时禁用
     )
     from .ackermann_bezier_gcs import AckermannBezierGCS
     from .ackermann_scp_solver import AckermannSCPSolver
     from .ackermann_gcs_planner import AckermannGCSPlanner
     from .trajectory_evaluator import TrajectoryEvaluator
     from .flat_output_mapper import FlatOutputMapper, compute_flat_output_mapping
-    from .curvature_cost_module import CurvatureCostModule
-    from .curvature_cost_linearizer import CurvatureCostLinearizer
-    from .curvature_derivative_cost import CurvatureDerivativeCost
-    from .curvature_peak_cost import CurvaturePeakCost
+    # from .curvature_cost_module import CurvatureCostModule  # [2025-04-06] 曲率成本功能暂时禁用
+    # from .curvature_cost_linearizer import CurvatureCostLinearizer  # [2025-04-06] 曲率成本功能暂时禁用
+    # from .curvature_derivative_cost import CurvatureDerivativeCost  # [2025-04-06] 曲率成本功能暂时禁用
+    # from .curvature_peak_cost import CurvaturePeakCost  # [2025-04-06] 曲率成本功能暂时禁用
     from .analytic_gradient_calculator import AnalyticGradientCalculator
     from .cost_calculator_interface import CostCalculatorInterface
     from .curvature_squared_cost_calculator import CurvatureSquaredCostCalculator
@@ -58,8 +58,8 @@ def __getattr__(name: str):
     if name in ("VehicleParams", "EndpointState", "TrajectoryConstraints",
                 "SCPConfig", "BezierConfig", "ConstraintViolation",
                 "ContinuityReport", "TrajectoryReport", "PlanningResult",
-                "LinearizedCostCoefficients", "CurvatureDerivatives",
-                "CurvatureCostConfig", "CurvatureCostWeights"):
+                "LinearizedCostCoefficients", "CurvatureDerivatives"):
+        # [2025-04-06] 曲率成本功能暂时禁用: 移除 CurvatureCostConfig, CurvatureCostWeights
         from . import ackermann_data_structures
         obj = getattr(ackermann_data_structures, name)
         _import_cache[name] = obj
@@ -92,37 +92,39 @@ def __getattr__(name: str):
         _import_cache[name] = obj
         return obj
     
-    # 曲率成本模块
-    if name == "CurvatureCostModule":
-        from .curvature_cost_module import CurvatureCostModule
-        _import_cache[name] = CurvatureCostModule
-        return CurvatureCostModule
-    
-    if name == "CurvatureCostLinearizer":
-        from .curvature_cost_linearizer import CurvatureCostLinearizer
-        _import_cache[name] = CurvatureCostLinearizer
-        return CurvatureCostLinearizer
-    
-    if name == "CurvatureDerivativeCost":
-        from .curvature_derivative_cost import CurvatureDerivativeCost
-        _import_cache[name] = CurvatureDerivativeCost
-        return CurvatureDerivativeCost
-    
-    if name == "CurvaturePeakCost":
-        from .curvature_peak_cost import CurvaturePeakCost
-        _import_cache[name] = CurvaturePeakCost
-        return CurvaturePeakCost
-    
-    if name == "CurvatureSquaredCostCalculator":
-        from .curvature_squared_cost_calculator import CurvatureSquaredCostCalculator
-        _import_cache[name] = CurvatureSquaredCostCalculator
-        return CurvatureSquaredCostCalculator
-    
-    if name == "AnalyticGradientCalculator":
-        from .analytic_gradient_calculator import AnalyticGradientCalculator
-        _import_cache[name] = AnalyticGradientCalculator
-        return AnalyticGradientCalculator
-    
+    # [2025-04-06] 曲率成本功能暂时禁用 - 开始
+    # # 曲率成本模块
+    # if name == "CurvatureCostModule":
+    #     from .curvature_cost_module import CurvatureCostModule
+    #     _import_cache[name] = CurvatureCostModule
+    #     return CurvatureCostModule
+    #
+    # if name == "CurvatureCostLinearizer":
+    #     from .curvature_cost_linearizer import CurvatureCostLinearizer
+    #     _import_cache[name] = CurvatureCostLinearizer
+    #     return CurvatureCostLinearizer
+    #
+    # if name == "CurvatureDerivativeCost":
+    #     from .curvature_derivative_cost import CurvatureDerivativeCost
+    #     _import_cache[name] = CurvatureDerivativeCost
+    #     return CurvatureDerivativeCost
+    #
+    # if name == "CurvaturePeakCost":
+    #     from .curvature_peak_cost import CurvaturePeakCost
+    #     _import_cache[name] = CurvaturePeakCost
+    #     return CurvaturePeakCost
+    #
+    # if name == "CurvatureSquaredCostCalculator":
+    #     from .curvature_squared_cost_calculator import CurvatureSquaredCostCalculator
+    #     _import_cache[name] = CurvatureSquaredCostCalculator
+    #     return CurvatureSquaredCostCalculator
+    #
+    # if name == "AnalyticGradientCalculator":
+    #     from .analytic_gradient_calculator import AnalyticGradientCalculator
+    #     _import_cache[name] = AnalyticGradientCalculator
+    #     return AnalyticGradientCalculator
+    # [2025-04-06] 曲率成本功能暂时禁用 - 结束
+
     if name == "CostCalculatorInterface":
         from .cost_calculator_interface import CostCalculatorInterface
         _import_cache[name] = CostCalculatorInterface
@@ -144,21 +146,23 @@ __all__ = [
     "PlanningResult",
     "LinearizedCostCoefficients",
     "CurvatureDerivatives",
-    "CurvatureCostConfig",
-    "CurvatureCostWeights",
+    # "CurvatureCostConfig",  # [2025-04-06] 曲率成本功能暂时禁用
+    # "CurvatureCostWeights",  # [2025-04-06] 曲率成本功能暂时禁用
     # 核心类
     "AckermannBezierGCS",
     "AckermannSCPSolver",
     "AckermannGCSPlanner",
     "TrajectoryEvaluator",
     "FlatOutputMapper",
-    # 曲率成本模块
-    "CurvatureCostModule",
-    "CurvatureCostLinearizer",
-    "CurvatureDerivativeCost",
-    "CurvaturePeakCost",
-    "CurvatureSquaredCostCalculator",
-    "AnalyticGradientCalculator",
+    # [2025-04-06] 曲率成本功能暂时禁用 - 开始
+    # # 曲率成本模块
+    # "CurvatureCostModule",
+    # "CurvatureCostLinearizer",
+    # "CurvatureDerivativeCost",
+    # "CurvaturePeakCost",
+    # "CurvatureSquaredCostCalculator",
+    # "AnalyticGradientCalculator",
+    # [2025-04-06] 曲率成本功能暂时禁用 - 结束
     # 新增接口
     "CostCalculatorInterface",
     # 函数

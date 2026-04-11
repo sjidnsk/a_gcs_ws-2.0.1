@@ -680,7 +680,8 @@ class ContinuityReport:
 
 
 # ==================== 曲率惩罚成本相关数据结构 ====================
-
+# [2025-04-06] 曲率成本功能暂时禁用 - 开始
+'''
 @dataclass
 class CurvatureCostConfig:
     """
@@ -776,6 +777,8 @@ class CurvatureCostWeights:
     def todict(self) -> Dict:
         """转换为字典"""
         return asdict(self)
+'''
+# [2025-04-06] 曲率成本功能暂时禁用 - 结束
 
 
 @dataclass

@@ -18,6 +18,12 @@ IrisNp 凸区域生成模块
 作者: Path Planning Team
 """
 
+import sys
+import os
+path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'))
+if path not in sys.path:
+    sys.path.insert(0, path)
+
 from config.iris import (
     IrisNpConfig,
     IrisNpConfigOptimized,

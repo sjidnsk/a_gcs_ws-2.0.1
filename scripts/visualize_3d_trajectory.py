@@ -136,11 +136,15 @@ def visualize_3d_trajectory_interactive(
         target=target,
         workspace_regions=workspace_regions,
         constraints=None,
-        cost_weights={"time": 1.0, "path_length": 0.1, "energy": 100.0 ,    # 添加曲率惩罚成本（新增）
-    "curvature_squared": 0.5,      # 曲率平方积分权重
-    "curvature_derivative": 0.05,  # 曲率导数平方积分权重
-    "curvature_peak": 0.1         # 曲率峰值惩罚权重
-    },
+        cost_weights={
+            "time": 1.0,
+            "path_length": 0.1,
+            "energy": 100.0,
+            # 曲率成本已禁用（非凸成本，需要凸松弛或SCP处理）
+            # "curvature_squared": 0.0,      # 曲率平方积分权重（已禁用）
+            # "curvature_derivative": 0.0,   # 曲率导数平方积分权重（已禁用）
+            # "curvature_peak": 0.0          # 曲率峰值惩罚权重（已禁用）
+        },
         verbose=True  # 启用详细输出，显示约束信息
     )
     
