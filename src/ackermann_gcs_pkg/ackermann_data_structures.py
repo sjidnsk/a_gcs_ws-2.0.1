@@ -62,6 +62,12 @@ DEFAULT_BATCH_SIZE: int = 20  # 并行处理默认批次大小
 
 SMALL_EPSILON: float = 1e-6  # 小量容差，用于判断向量是否为零
 
+# === 时间缩放导数下界常量 ===
+# 用于确保时间缩放导数h'(s)不会过小，避免速度/加速度数值不稳定
+
+HDOT_MIN_DEFAULT: float = 0.01  # hdot_min物理合理默认值
+HDOT_MIN_WARNING_THRESHOLD: float = 0.001  # hdot_min过小警告阈值
+
 
 @dataclass
 class VehicleParams:
@@ -660,15 +666,19 @@ class BezierConfig:
     Attributes:
         order: 贝塞尔曲线阶数（控制点数量 = order + 1）
         continuity: 连续性阶数（0=C0，1=C1，2=C2）
-        hdot_min: 时间导数最小值（避免时间倒流）
+        hdot_min: 时间导数最小值（避免时间倒流和数值不稳定）
         full_dim_overlap: 是否使用全维重叠
         hyperellipsoid_num_samples_per_dim_factor: 超椭球采样因子
+        max_rounding_attempts: 舍入验证重试次数
+        max_rounded_paths: 每次舍入尝试的路径数
     """
     order: int = 5
     continuity: int = 1
-    hdot_min: float = SMALL_EPSILON
+    hdot_min: float = HDOT_MIN_DEFAULT
     full_dim_overlap: bool = False
     hyperellipsoid_num_samples_per_dim_factor: int = 32
+    max_rounding_attempts: int = 3
+    max_rounded_paths: int = 10
 
     def __post_init__(self):
         """参数验证"""
@@ -678,6 +688,15 @@ class BezierConfig:
             raise ValueError(f"continuity must be in [0, {self.order-1}], got {self.continuity}")
         if self.hdot_min <= 0:
             raise ValueError(f"hdot_min must be positive, got {self.hdot_min}")
+        if self.hdot_min < HDOT_MIN_WARNING_THRESHOLD:
+            import warnings
+            warnings.warn(
+                f"hdot_min={self.hdot_min} is below recommended threshold "
+                f"{HDOT_MIN_WARNING_THRESHOLD}. This may cause numerical "
+                f"instability in velocity/acceleration constraints.",
+                UserWarning,
+                stacklevel=2,
+            )
 
     @classmethod
     def fromdict(cls, data: Dict) -> 'BezierConfig':

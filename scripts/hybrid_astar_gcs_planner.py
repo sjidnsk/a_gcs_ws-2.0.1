@@ -69,15 +69,15 @@ DEFAULT_VEHICLE_PARAMS = VehicleParams(
     wheelbase=2.5,                    # 轴距（米）
     max_steering_angle=np.deg2rad(85),  # 最大转向角 85°（弧度）
     max_velocity=10.0,                # 最大速度（米/秒）
-    max_acceleration=5.0              # 最大加速度（米/秒²）
+    max_acceleration=8.0              # 最大加速度（米/秒²）
 )
 
 # 场景配置字典
 SCENARIO_CONFIGS = {
     'basic': {
         'map_size': 200,
-        'start': (2.5, 18.4, 1.0),
-        'goal': (18.0, 19.5, -1.0),
+        'start': (12.5, 2.5, 2.0),
+        'goal': (18.0, 19.5, 0.5),
         'corridor_width': 100.0
     },
     'minimal': {

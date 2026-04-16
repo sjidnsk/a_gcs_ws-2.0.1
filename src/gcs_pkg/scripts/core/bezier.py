@@ -79,7 +79,7 @@ class BezierGCS(BaseGCS):
     并在顶点之间添加B样条曲线的连续性约束，实现平滑轨迹规划。
     """
     
-    def __init__(self, regions, order, continuity, edges=None, hdot_min=1e-6, full_dim_overlap=False, hyperellipsoid_num_samples_per_dim_factor=32):
+    def __init__(self, regions, order, continuity, edges=None, hdot_min=0.01, full_dim_overlap=False, hyperellipsoid_num_samples_per_dim_factor=32):
         """
         初始化贝塞尔GCS
         
@@ -96,6 +96,7 @@ class BezierGCS(BaseGCS):
 
         self.order = order
         self.continuity = continuity
+        self.hdot_min = hdot_min
         # 存储采样点数量参数（作为因子）
         self.hyperellipsoid_num_samples_per_dim_factor = hyperellipsoid_num_samples_per_dim_factor
         assert continuity < order  # 连续性要求必须小于曲线阶数
@@ -410,6 +411,85 @@ class BezierGCS(BaseGCS):
                     if edge.u() == self.source:
                         continue
                     edge.AddCost(Binding[Cost](reg_cost, edge.xu()))
+
+    def addTimeDerivativeRegularization(self, weight: float):
+        """
+        添加时间导数正则化：惩罚过小的时间缩放导数h'(s)
+
+        通过对时间轨迹h(s)的一阶导数控制点添加二次正则化成本，
+        使h'(s)远离零值，避免ds/dt = 1/h'(s)过大导致加速度爆炸。
+
+        数学推导：
+            目标：惩罚 h'(s) 偏离参考值 h_ref 的程度
+            成本形式：Σ_i weight * ||h'_i - h_ref||^2
+            其中 h'_i 是第i个一阶导数控制点，h_ref 是参考时间导数
+
+            展开为二次形式：
+            weight * Σ_i ||h'_i||^2 - 2*weight*h_ref*Σ_i h'_i + const
+            = weight * Σ_i (h'_i^T * h'_i) - 2*weight*h_ref*Σ_i h'_i + const
+
+            第一项：QuadraticCost（凸）
+            第二项：LinearCost（凸）
+            常数项：可忽略
+
+        凸性保证：
+            QuadraticCost 和 LinearCost 均为凸成本，
+            不破坏GCS优化问题的凸性。
+
+        Args:
+            weight (float): 正则化权重，必须为非负数。
+                weight越大，h'(s)越远离零值，轨迹时间越长但数值更稳定。
+                推荐范围：[0.1, 10.0]
+                weight=0时等效于禁用正则化。
+
+        Raises:
+            AssertionError: 如果weight为负数
+
+        Note:
+            - 此方法与addDerivativeRegularization的区别：
+              addDerivativeRegularization正则化二阶及以上导数（order>=2），
+              此方法正则化一阶导数，专门用于防止h'(s)过小。
+            - 参考值h_ref自动从hdot_min推导，无需用户指定。
+        """
+        assert weight >= 0, f"weight must be non-negative, got {weight}"
+        if weight == 0:
+            return
+
+        # 获取时间轨迹的一阶导数控制点
+        u_time_deriv_control = self.u_h_trajectory.MakeDerivative(1).control_points()
+
+        # 参考值：使用 hdot_min 作为 h'(s) 的目标值
+        h_ref = self.hdot_min
+
+        # 对每个一阶导数控制点添加正则化成本
+        for c in u_time_deriv_control:
+            # 将控制点表达式分解为线性系数
+            A_ctrl = DecomposeLinearExpressions(c, self.u_vars)
+
+            # 二次项：weight * ||h'_i||^2
+            # QuadraticCost(H, b, c): 成本 = 0.5 * x^T * H * x + b^T * x + c
+            # 我们需要 weight * ||A_ctrl @ x||^2 = weight * x^T * (A_ctrl^T * A_ctrl) * x
+            H_quad = A_ctrl.T.dot(A_ctrl) * 2 * weight
+            # 确保H_quad是正半定的（添加微小对角正则化避免浮点误差）
+            H_quad += np.eye(H_quad.shape[0]) * 1e-12
+            quad_cost = QuadraticCost(
+                H_quad, np.zeros(H_quad.shape[0]), 0
+            )
+
+            # 线性项：-2 * weight * h_ref * h'_i
+            # LinearCost(a, b): 成本 = a^T * x + b
+            a_lin = -2 * weight * h_ref * A_ctrl[0, :]
+            lin_cost = LinearCost(a_lin, 0.0)
+
+            self.edge_costs.append(quad_cost)
+            self.edge_costs.append(lin_cost)
+
+            # 对所有GCS边添加成本（源点边除外）
+            for edge in self.gcs.Edges():
+                if edge.u() == self.source:
+                    continue
+                edge.AddCost(Binding[Cost](quad_cost, edge.xu()))
+                edge.AddCost(Binding[Cost](lin_cost, edge.xu()))
 
     def addVelocityLimits(self, lower_bound, upper_bound):
         """

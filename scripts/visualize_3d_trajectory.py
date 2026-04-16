@@ -140,7 +140,7 @@ def visualize_3d_trajectory_interactive(
         max_curvature=vehicle_params.max_curvature,
         workspace_regions=workspace_regions,
         enable_curvature_hard_constraint=True,
-        min_velocity=2.0,  # 提高速度下界以收紧曲率约束
+        min_velocity=3.0,  # 提高速度下界以收紧曲率约束
         curvature_constraint_mode="hard",
     )
     
@@ -159,6 +159,7 @@ def visualize_3d_trajectory_interactive(
             "time": 3.0,
             "path_length": 1.5,
             "energy": 3.0,
+            "time_derivative_reg": 3.0,
         },
         verbose=True  # 启用详细输出，显示约束信息
     )

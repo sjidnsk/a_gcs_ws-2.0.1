@@ -231,6 +231,16 @@ class AckermannGCSPlanner:
             if verbose:
                 print(f"[Planner]   Energy cost weight: {cost_weights['energy']}")
 
+        if "time_derivative_reg" in cost_weights and cost_weights["time_derivative_reg"] > 0:
+            bezier_gcs.addTimeDerivativeRegularization(
+                cost_weights["time_derivative_reg"]
+            )
+            if verbose:
+                print(
+                    f"[Planner]   Time derivative regularization weight: "
+                    f"{cost_weights['time_derivative_reg']}"
+                )
+
         # [2025-04-06] 曲率成本功能暂时禁用 - 开始
         # # 新增：添加曲率惩罚成本
         # curvature_weights = CurvatureCostWeights(
@@ -259,18 +269,25 @@ class AckermannGCSPlanner:
         )
 
         if use_curvature_hard_constraint:
-            # 曲率硬约束路径：多次GCS求解，选择曲率违反最小的轨迹
+            # 曲率硬约束路径：多次GCS求解，选择综合违反最小的轨迹
             # GCS rounding具有随机性，多次求解可提高可行率
-            max_solve_attempts = 3
+            max_solve_attempts = self.bezier_config.max_rounding_attempts
+            max_rounded_paths = self.bezier_config.max_rounded_paths
             if verbose:
                 print(f"[Planner] 曲率硬约束已启用，跳过SCP迭代，"
-                      f"GCS求解（最多{max_solve_attempts}次尝试）...")
+                      f"GCS求解（最多{max_solve_attempts}次尝试，"
+                      f"每次{max_rounded_paths}条舍入路径）...")
 
             best_trajectory = None
+            best_velocity_violation = np.inf
             best_curvature_violation = np.inf
+            best_combined_violation = np.inf
             best_attempt = 0
 
             for attempt in range(max_solve_attempts):
+                # 配置舍入路径数量
+                bezier_gcs.options.max_rounded_paths = max_rounded_paths
+
                 result = bezier_gcs.SolvePathWithConstraints(
                     rounding=True, preprocessing=True, verbose=(verbose and attempt == 0)
                 )
@@ -279,28 +296,39 @@ class AckermannGCSPlanner:
                 if trajectory_candidate is None:
                     continue
 
-                # 评估曲率违反量
+                # 评估速度和曲率违反量
                 try:
                     report = self.evaluator.evaluate_trajectory(
                         trajectory_candidate, constraints
                     )
+                    vel_viol = 0.0
                     curv_viol = 0.0
+                    if report.velocity_violation:
+                        vel_viol = report.velocity_violation.max_violation
                     if report.curvature_violation:
                         curv_viol = report.curvature_violation.max_violation
+                    # 综合违反量：速度违反权重更高
+                    combined_viol = vel_viol * 10.0 + curv_viol
                 except Exception:
+                    vel_viol = np.inf
                     curv_viol = np.inf
+                    combined_viol = np.inf
 
                 if verbose and attempt > 0:
-                    print(f"  尝试 {attempt+1}: κ_viol={curv_viol:.6f}")
+                    print(f"  尝试 {attempt+1}: "
+                          f"v_viol={vel_viol:.6f}, "
+                          f"κ_viol={curv_viol:.6f}")
 
-                # 选择曲率违反最小的轨迹
-                if curv_viol < best_curvature_violation:
+                # 选择综合违反量最小的轨迹
+                if combined_viol < best_combined_violation:
+                    best_velocity_violation = vel_viol
                     best_curvature_violation = curv_viol
+                    best_combined_violation = combined_viol
                     best_trajectory = trajectory_candidate
                     best_attempt = attempt + 1
 
-                # 如果已找到可行解，提前退出
-                if best_curvature_violation < 1e-4:
+                # 如果速度和曲率均可行，提前退出
+                if best_velocity_violation < 1e-4 and best_curvature_violation < 1e-4:
                     break
 
             trajectory = best_trajectory
@@ -308,8 +336,13 @@ class AckermannGCSPlanner:
 
             if verbose:
                 if trajectory is not None:
-                    print(f"[Planner] ✓ GCS求解成功（尝试{best_attempt}/{max_solve_attempts}，"
+                    print(f"[Planner] ✓ GCS求解成功"
+                          f"（尝试{best_attempt}/{max_solve_attempts}，"
+                          f"v_viol={best_velocity_violation:.6f}，"
                           f"κ_viol={best_curvature_violation:.6f}）")
+                    if best_velocity_violation >= 1e-4:
+                        print(f"[Planner] ⚠ 速度约束仍有违反: "
+                              f"{best_velocity_violation:.6f} m/s")
                 else:
                     print("[Planner] ✗ GCS求解失败")
         else:
