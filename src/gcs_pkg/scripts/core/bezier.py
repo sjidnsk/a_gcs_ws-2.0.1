@@ -713,39 +713,6 @@ class BezierGCS(BaseGCS):
                     continue
                 edge.AddConstraint(Binding[Constraint](curvature_con, edge.xu()))
 
-    def addTurningRadiusConstraint(self, min_radius, max_velocity):
-        """
-        添加转弯半径约束（通过限制向心加速度实现）
-        公式: ||r''(t)|| <= (v^2 / min_radius)
-        """
-        # 计算加速度上限
-        max_accel = (max_velocity**2) / min_radius
-        
-        # 获取空间轨迹的二阶导数控制点 r''(s)
-        # 注意：这里的导数是相对于参数 s 的，需要转换到时间 t
-        u_path_ddot = self.u_r_trajectory.MakeDerivative(2).control_points()
-        u_time_dot = self.u_h_trajectory.MakeDerivative(1).control_points()
-        
-        # 近似处理：在 s 域限制加速度
-        # 严谨做法需考虑 ds/dt 的平方，这里简化为对空间曲率控制点的约束
-        for ii in range(len(u_path_ddot)):
-            # 提取二阶导数的线性表达式矩阵
-            A_ctrl = DecomposeLinearExpressions(u_path_ddot[ii], self.u_vars)
-            
-            # 创建 L2Norm 约束: ||A_ctrl * vars|| <= max_accel
-            # 注意：实际中 s 和 t 的关系非线性，这里通常假设速度恒定进行预估
-            accel_con = L2NormCost(A_ctrl, np.zeros(self.dimension)) 
-            
-            # 遍历所有边，添加这个“成本”作为软约束，或使用 AddConstraint 添加硬约束
-            for edge in self.gcs.Edges():
-                if edge.u() == self.source:
-                    continue
-                # 添加硬约束：加速度控制点必须在半径为 max_accel 的球体内
-                edge.AddConstraint(Binding[Constraint](
-                    LinearConstraint(A_ctrl, -max_accel * np.ones(self.dimension), 
-                                    max_accel * np.ones(self.dimension)), 
-                    edge.xu()))
-
     def _isSourceInVertexRegion(self, source, vertex):
         """检查源点是否在顶点区域内"""
         # 获取顶点集合

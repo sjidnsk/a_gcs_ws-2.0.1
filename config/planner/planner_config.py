@@ -109,11 +109,11 @@ class PlannerConfig:
 
     # 阿克曼车辆参数
     ackermann_wheelbase: float = 2.5  # 轴距（米）
-    ackermann_v_min: float = 0.0      # 最小速度（米/秒）
-    ackermann_v_max: float = 5.0      # 最大速度（米/秒）
-    ackermann_delta_min: float = -np.pi/4  # 最小转向角（弧度）
-    ackermann_delta_max: float = np.pi/4   # 最大转向角（弧度）
-    ackermann_r_min: Optional[float] = None  # 最小转弯半径（米）
+    ackermann_v_min: float = 1.58     # 最小速度（米/秒），从成本权重推导: sqrt(w_time/w_energy)*0.5
+    ackermann_v_max: float = 10.0     # 最大速度（米/秒）
+    ackermann_delta_min: float = -np.deg2rad(85)  # 最小转向角（弧度）
+    ackermann_delta_max: float = np.deg2rad(85)   # 最大转向角（弧度）
+    ackermann_r_min: Optional[float] = None  # 最小转弯半径（米），由 wheelbase/tan(delta_max) 自动计算
 
     # 可视化
     enable_visualization: bool = True
@@ -133,6 +133,10 @@ class PlannerConfig:
             self.iris_config = get_high_safety_config()
             if self.iris_config is not None:
                 print("使用默认IRIS配置（IrisNpConfigOptimized）")
+        
+        # 自动计算最小转弯半径（如果未指定）
+        if self.ackermann_r_min is None:
+            self.ackermann_r_min = self.ackermann_wheelbase / np.tan(self.ackermann_delta_max)
         
         # 应用GCS策略预设
         self._apply_gcs_strategy_preset()

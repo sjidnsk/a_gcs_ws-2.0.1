@@ -107,11 +107,21 @@ class AckermannGCSPlanner:
 
         # 步骤1：构建轨迹约束（如果未提供）
         if constraints is None:
+            # 从成本权重推导 min_velocity（如果提供了成本权重）
+            min_vel = 1.58  # 默认值，对应 w_time=1.0, w_energy=0.1
+            if cost_weights is not None and "time" in cost_weights and "energy" in cost_weights:
+                w_time = cost_weights["time"]
+                w_energy = cost_weights["energy"]
+                if w_energy > 0:
+                    min_vel = TrajectoryConstraints.compute_min_velocity_from_weights(
+                        w_time, w_energy
+                    )
             constraints = TrajectoryConstraints(
                 max_velocity=self.vehicle_params.max_velocity,
                 max_acceleration=self.vehicle_params.max_acceleration,
                 max_curvature=self.vehicle_params.max_curvature,
                 workspace_regions=workspace_regions,
+                min_velocity=min_vel,
             )
 
         # 步骤2：初始化AckermannBezierGCS

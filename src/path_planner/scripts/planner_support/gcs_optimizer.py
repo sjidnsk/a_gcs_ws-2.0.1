@@ -157,9 +157,9 @@ class GCSOptimizer:
 
             # 获取车辆参数
             wheelbase = getattr(self.config, 'ackermann_wheelbase', 2.5)
-            max_steering_angle = getattr(self.config, 'ackermann_delta_max', np.pi/4)
-            v_max = getattr(self.config, 'ackermann_v_max', 5.0)
-            max_acceleration = getattr(self.config, 'ackermann_max_acceleration', 2.0)
+            max_steering_angle = getattr(self.config, 'ackermann_delta_max', np.deg2rad(85))
+            v_max = getattr(self.config, 'ackermann_v_max', 10.0)
+            max_acceleration = getattr(self.config, 'ackermann_max_acceleration', 5.0)
 
             # 创建车辆参数
             vehicle_params = VehicleParams(

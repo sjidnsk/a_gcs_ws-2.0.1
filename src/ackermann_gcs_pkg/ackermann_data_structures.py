@@ -74,12 +74,14 @@ class VehicleParams:
         max_velocity: 最大速度（米/秒）
         max_acceleration: 最大加速度（米/秒²）
         max_curvature: 最大曲率（1/米），由 max_steering_angle 和 wheelbase 计算
+        min_turning_radius: 最小转弯半径（米），由 wheelbase / tan(δ_max) 计算
     """
     wheelbase: float
     max_steering_angle: float
     max_velocity: float
     max_acceleration: float
     max_curvature: float = field(init=False)
+    min_turning_radius: float = field(init=False)
 
     def __post_init__(self):
         """参数验证和计算"""
@@ -100,6 +102,8 @@ class VehicleParams:
 
         # 计算最大曲率：κ_max = tan(δ_max) / L
         self.max_curvature = np.tan(self.max_steering_angle) / self.wheelbase
+        # 计算最小转弯半径：R_min = L / tan(δ_max) = 1 / κ_max
+        self.min_turning_radius = self.wheelbase / np.tan(self.max_steering_angle)
 
     @classmethod
     def fromdict(cls, data: Dict) -> 'VehicleParams':
@@ -166,6 +170,8 @@ class TrajectoryConstraints:
         workspace_regions: 工作空间区域（HPolyhedron列表）
         enable_curvature_hard_constraint: 是否启用曲率硬约束
         min_velocity: 最小速度（米/秒），用于曲率硬约束计算rho_min
+            推导方式: v_optimal = sqrt(w_time / w_energy), min_velocity = v_optimal * 0.5
+            默认1.58 m/s 对应 w_time=1.0, w_energy=0.1
         curvature_constraint_mode: 曲率约束模式
     """
     max_velocity: float
@@ -173,7 +179,7 @@ class TrajectoryConstraints:
     max_curvature: float
     workspace_regions: Optional[List] = None
     enable_curvature_hard_constraint: bool = False
-    min_velocity: float = 0.7
+    min_velocity: float = 1.58
     curvature_constraint_mode: str = "none"
 
     def __post_init__(self):
@@ -200,6 +206,28 @@ class TrajectoryConstraints:
     def fromdict(cls, data: Dict) -> 'TrajectoryConstraints':
         """从字典创建实例"""
         return cls(**data)
+
+    @staticmethod
+    def compute_min_velocity_from_weights(
+        w_time: float, w_energy: float, safety_factor: float = 0.5
+    ) -> float:
+        """从成本权重推导最小速度。
+
+        最优速度 v_optimal = sqrt(w_time / w_energy)，
+        min_velocity = v_optimal * safety_factor。
+
+        Args:
+            w_time: 时间成本权重
+            w_energy: 能量成本权重
+            safety_factor: 保守系数，默认0.5
+
+        Returns:
+            推导的最小速度（米/秒）
+        """
+        if w_energy <= 0:
+            raise ValueError(f"w_energy must be positive, got {w_energy}")
+        v_optimal = np.sqrt(w_time / w_energy)
+        return v_optimal * safety_factor
 
     def todict(self) -> Dict:
         """转换为字典"""
