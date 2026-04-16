@@ -39,32 +39,41 @@ class CurvatureStatistics:
     def _compute_trajectory_derivatives(
         self,
         trajectory,
-        s: float,
+        t: float,
         order: int = 2
     ) -> Tuple[np.ndarray, ...]:
         """
-        计算轨迹在参数s处的导数
+        计算轨迹在物理时间t处的导数
+
+        使用 EvalDerivative 方法正确处理时间参数化，
+        而非 derivative().value() （后者在参数域外推会产生错误结果）。
 
         Args:
-            trajectory: 轨迹对象（BsplineTrajectory）
-            s: 参数值
+            trajectory: 轨迹对象（BezierTrajectory）
+            t: 物理时间值
             order: 导数阶数
 
         Returns:
             导数元组
         """
-        # 使用轨迹对象的导数方法
-        if hasattr(trajectory, 'derivative'):
-            first_deriv = trajectory.derivative(1).value(s)
+        # 优先使用 EvalDerivative（正确处理时间参数化）
+        if hasattr(trajectory, 'EvalDerivative'):
+            first_deriv = trajectory.EvalDerivative(t, 1)
             if order >= 2:
-                second_deriv = trajectory.derivative(2).value(s)
+                second_deriv = trajectory.EvalDerivative(t, 2)
+                return first_deriv, second_deriv
+            return (first_deriv,)
+        # 回退：使用 derivative().value()
+        elif hasattr(trajectory, 'derivative'):
+            first_deriv = trajectory.derivative(1).value(t)
+            if order >= 2:
+                second_deriv = trajectory.derivative(2).value(t)
                 return first_deriv, second_deriv
             return (first_deriv,)
         elif hasattr(trajectory, 'CalcValue') and hasattr(trajectory, 'CalcDerivative'):
-            # Drake风格的API
-            first_deriv = trajectory.CalcDerivative(s, 1)
+            first_deriv = trajectory.CalcDerivative(t, 1)
             if order >= 2:
-                second_deriv = trajectory.CalcDerivative(s, 2)
+                second_deriv = trajectory.CalcDerivative(t, 2)
                 return first_deriv, second_deriv
             return (first_deriv,)
         else:
@@ -78,11 +87,11 @@ class CurvatureStatistics:
                 raise ValueError("Trajectory object has no value method")
 
             # 一阶导数
-            first_deriv = (value_method(s + epsilon) - value_method(s - epsilon)) / (2 * epsilon)
+            first_deriv = (value_method(t + epsilon) - value_method(t - epsilon)) / (2 * epsilon)
 
             if order >= 2:
                 # 二阶导数
-                second_deriv = (value_method(s + epsilon) - 2 * value_method(s) + value_method(s - epsilon)) / (epsilon**2)
+                second_deriv = (value_method(t + epsilon) - 2 * value_method(t) + value_method(t - epsilon)) / (epsilon**2)
                 return first_deriv, second_deriv
 
             return (first_deriv,)
@@ -90,23 +99,23 @@ class CurvatureStatistics:
     def _compute_curvature_at_point(
         self,
         trajectory,
-        s: float
+        t: float
     ) -> float:
         """
-        计算轨迹在参数s处的曲率
+        计算轨迹在物理时间t处的曲率
 
         曲率公式：κ = (ẋÿ - ẏẍ) / (ẋ² + ẏ²)^(3/2)
 
         Args:
             trajectory: 轨迹对象
-            s: 参数值
+            t: 物理时间值
 
         Returns:
             曲率值
         """
         # 计算一阶和二阶导数
         first_deriv, second_deriv = self._compute_trajectory_derivatives(
-            trajectory, s, order=2
+            trajectory, t, order=2
         )
 
         x_dot = first_deriv[0]
@@ -137,8 +146,15 @@ class CurvatureStatistics:
         Returns:
             曲率统计信息
         """
-        # 采样轨迹参数 s ∈ [0, 1]
-        s_array = np.linspace(0, 1, self.num_samples)
+        # 采样轨迹参数 s ∈ [start_time, end_time]
+        # 使用轨迹的实际时间区间，而非硬编码 [0, 1]
+        if hasattr(trajectory, 'start_time') and hasattr(trajectory, 'end_time'):
+            t_start = trajectory.start_time()
+            t_end = trajectory.end_time()
+        else:
+            t_start = 0.0
+            t_end = 1.0
+        s_array = np.linspace(t_start, t_end, self.num_samples)
 
         # 计算每个采样点的曲率
         kappa_array = np.array([
@@ -235,7 +251,13 @@ class CurvatureStatistics:
         Returns:
             (s_array, kappa_array): 参数数组和曲率数组
         """
-        s_array = np.linspace(0, 1, num_samples)
+        if hasattr(trajectory, 'start_time') and hasattr(trajectory, 'end_time'):
+            t_start = trajectory.start_time()
+            t_end = trajectory.end_time()
+        else:
+            t_start = 0.0
+            t_end = 1.0
+        s_array = np.linspace(t_start, t_end, num_samples)
         kappa_array = np.array([
             self._compute_curvature_at_point(trajectory, s)
             for s in s_array
