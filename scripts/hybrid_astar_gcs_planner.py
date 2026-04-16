@@ -64,10 +64,10 @@ from visualization.ackermann import visualize_trajectory
 
 # ==================== 阿克曼GCS配置 ====================
 
-# 默认车辆参数（月球探测车：大转向角提供高灵活性）
+# 默认车辆参数
 DEFAULT_VEHICLE_PARAMS = VehicleParams(
     wheelbase=2.5,                    # 轴距（米）
-    max_steering_angle=np.radians(85),  # 最大转向角 85°（月球探测车需极高灵活性）
+    max_steering_angle=np.pi / 6,     # 最大转向角（弧度）
     max_velocity=10.0,                # 最大速度（米/秒）
     max_acceleration=5.0              # 最大加速度（米/秒²）
 )
@@ -76,8 +76,8 @@ DEFAULT_VEHICLE_PARAMS = VehicleParams(
 SCENARIO_CONFIGS = {
     'basic': {
         'map_size': 200,
-        'start': (2.5, 18.4, -1.0),
-        'goal': (18.0, 19.5, 1.0),
+        'start': (2.5, 18.4, 0.0),
+        'goal': (18.0, 19.5, 0.0),
         'corridor_width': 100.0
     },
     'minimal': {

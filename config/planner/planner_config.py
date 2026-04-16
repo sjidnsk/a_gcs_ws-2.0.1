@@ -107,13 +107,13 @@ class PlannerConfig:
     gcs_zero_velocity_at_boundaries: bool = True  # 是否在起点和终点设置零速度约束（改为False以减少突变）
     gcs_min_time_derivative: float = 1.0  # 时间轨迹导数的最小值，防止 dh/ds 过小导致速度突变（降低以允许更平滑的过渡）
 
-    # 阿克曼车辆参数（月球探测车：大转向角提供高灵活性）
+    # 阿克曼车辆参数
     ackermann_wheelbase: float = 2.5  # 轴距（米）
-    ackermann_v_min: float = 1.5      # 最小速度（米/秒），用于曲率硬约束的ρ_min估计
-    ackermann_v_max: float = 10.0     # 最大速度（米/秒）
-    ackermann_delta_min: float = -np.radians(85)  # 最小转向角 -85°
-    ackermann_delta_max: float = np.radians(85)   # 最大转向角 85°（月球探测车需极高灵活性）
-    ackermann_r_min: Optional[float] = None  # 最小转弯半径（米），None则从δ_max和L自动计算
+    ackermann_v_min: float = 0.0      # 最小速度（米/秒）
+    ackermann_v_max: float = 5.0      # 最大速度（米/秒）
+    ackermann_delta_min: float = -np.pi/4  # 最小转向角（弧度）
+    ackermann_delta_max: float = np.pi/4   # 最大转向角（弧度）
+    ackermann_r_min: Optional[float] = None  # 最小转弯半径（米）
 
     # 可视化
     enable_visualization: bool = True
@@ -133,10 +133,6 @@ class PlannerConfig:
             self.iris_config = get_high_safety_config()
             if self.iris_config is not None:
                 print("使用默认IRIS配置（IrisNpConfigOptimized）")
-        
-        # 自动计算最小转弯半径（如果未指定）
-        if self.ackermann_r_min is None:
-            self.ackermann_r_min = self.ackermann_wheelbase / np.tan(self.ackermann_delta_max)
         
         # 应用GCS策略预设
         self._apply_gcs_strategy_preset()

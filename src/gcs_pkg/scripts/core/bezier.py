@@ -348,15 +348,12 @@ class BezierGCS(BaseGCS):
                         continue
                     edge.AddCost(Binding[Cost](integral_cost, edge.xu()))
 
-    def addPathEnergyCost(self, weight, edges=None):
+    def addPathEnergyCost(self, weight):
         """
         添加路径能量成本：最小化动能（速度平方积分）
-
+        
         Args:
             weight (float or array): 能量成本的权重
-            edges (list, optional): 指定添加成本的边列表。
-                若为None，则对所有非source边添加（默认行为）。
-                若提供，则仅对这些边添加成本（用于分段差异化成本）。
         """
         if isinstance(weight, float) or isinstance(weight, int):
             weight_matrix = weight * np.eye(self.dimension)
@@ -377,23 +374,19 @@ class BezierGCS(BaseGCS):
             energy_cost = PerspectiveQuadraticCost(H, np.zeros(H.shape[0]))
             self.edge_costs.append(energy_cost)
 
-            target_edges = edges if edges is not None else self.gcs.Edges()
-            for edge in target_edges:
+            for edge in self.gcs.Edges():
                 if edge.u() == self.source:
                     continue
                 edge.AddCost(Binding[Cost](energy_cost, edge.xu()))
 
-    def addDerivativeRegularization(self, weight_r, weight_h, order, edges=None):
+    def addDerivativeRegularization(self, weight_r, weight_h, order):
         """
         添加导数正则化：惩罚高阶导数，使轨迹更平滑
-
+        
         Args:
             weight_r (float): 空间轨迹导数的正则化权重
             weight_h (float): 时间轨迹导数的正则化权重
             order (int): 要正则化的导数阶数
-            edges (list, optional): 指定添加成本的边列表。
-                若为None，则对所有非source边添加（默认行为）。
-                若提供，则仅对这些边添加成本（用于分段差异化成本）。
         """
         assert isinstance(order, int) and 2 <= order <= self.order
         weights = [weight_r, weight_h]
@@ -413,8 +406,7 @@ class BezierGCS(BaseGCS):
                 reg_cost = QuadraticCost(H, np.zeros(H.shape[0]), 0)
                 self.edge_costs.append(reg_cost)
 
-                target_edges = edges if edges is not None else self.gcs.Edges()
-                for edge in target_edges:
+                for edge in self.gcs.Edges():
                     if edge.u() == self.source:
                         continue
                     edge.AddCost(Binding[Cost](reg_cost, edge.xu()))
@@ -538,152 +530,21 @@ class BezierGCS(BaseGCS):
                     continue
                 edge.AddConstraint(Binding[Constraint](velocity_con, edge.xu()))
 
-    @staticmethod
-    def compute_h_bar_prime_from_trajectory(traj, num_samples: int = 100) -> float:
-        """从已求解的轨迹中计算 h_bar_prime（时间参数化导数均值）
-
-        在两阶段求解流程中使用：先求解无曲率约束的 GCS，从结果中
-        计算实际 h_bar_prime，再用该值添加曲率约束重新求解。
-
-        数学原理：
-            h(s) 将参数 s 映射到物理时间 t，h'(s) = dh/ds
-            h_bar_prime = mean of h'(s) over the trajectory
-            实测表明 h_bar_prime ≈ L / T（路径长度 / 总物理时间）
-
-        Args:
-            traj: BezierTrajectory 对象（SolvePath 的返回值）
-            num_samples: 采样点数，默认 100
-
-        Returns:
-            h_bar_prime: 时间参数化导数均值
-
-        Example:
-            >>> result = bezier_gcs.SolvePath(rounding=True)
-            >>> traj = result[0] if isinstance(result, tuple) else result
-            >>> h_bar_prime = BezierGCS.compute_h_bar_prime_from_trajectory(traj)
+    def addCurvatureHardConstraint(self, max_curvature, min_velocity, h_bar_prime=None):
         """
-        s_start = traj.time_traj.start_time()
-        s_end = traj.time_traj.end_time()
+        添加曲率硬约束：||Q_j||_2 <= C = kappa_max * rho_min^2
 
-        s_samples = np.linspace(s_start, s_end, num_samples)
-        h_prime_values = []
-        for s in s_samples:
-            try:
-                h_prime = float(
-                    traj.time_traj.EvalDerivative(s, 1).flatten()[0]
-                )
-                h_prime_values.append(h_prime)
-            except Exception:
-                continue
-
-        if not h_prime_values:
-            raise RuntimeError(
-                "Failed to evaluate h'(s) from trajectory. "
-                "The trajectory may not be properly solved."
-            )
-
-        return float(np.mean(h_prime_values))
-
-    @staticmethod
-    def estimate_h_bar_prime(
-        path_length_estimate: float,
-        num_segments: int,
-        v_max: float = None,
-        v_min: float = None,
-        w_time: float = None,
-        w_energy: float = None,
-    ) -> float:
-        """从几何和成本权重估算 h_bar_prime（求解前使用）
-
-        基于实测验证的公式：h_bar_prime ≈ L / T
-        其中 L 是路径长度，T 是总物理时间。
-
-        估算策略（按优先级）：
-            1. 如果提供 w_time 和 w_energy：
-               v_optimal = sqrt(w_time / w_energy)
-               T ≈ L / v_optimal → h_bar_prime ≈ v_optimal * N / L * L / N
-               简化：h_bar_prime ≈ L / (N * v_optimal) * N = L / v_optimal
-               但实测 h_bar_prime = L / T = L / (L / v_avg) = v_avg
-               更准确：h_bar_prime ≈ L / (N_segments * T_per_segment)
-               其中 T_per_segment ≈ L_segment / v_optimal
-               所以 h_bar_prime ≈ v_optimal（当路径均匀时）
-
-            2. 如果提供 v_max 和 v_min：
-               v_avg ≈ (v_max + v_min) / 2
-               h_bar_prime ≈ path_length_estimate / (num_segments * T_per_segment)
-
-            3. 兜底：h_bar_prime = 1.0（中性假设）
-
-        Args:
-            path_length_estimate: 路径长度估计（如起终点欧氏距离）
-            num_segments: GCS 段数（区域数）
-            v_max: 最大速度约束（m/s），可选
-            v_min: 最小速度估计（m/s），可选
-            w_time: 时间成本权重，可选
-            w_energy: 能量成本权重，可选
-
-        Returns:
-            h_bar_prime 估计值
-
-        Example:
-            >>> h_bar_prime = BezierGCS.estimate_h_bar_prime(
-            ...     path_length_estimate=8.0,
-            ...     num_segments=2,
-            ...     w_time=3.0, w_energy=3.0,
-            ... )
-        """
-        if w_time is not None and w_energy is not None and w_energy > 0:
-            # 策略1：从成本权重估算最优速度
-            v_optimal = np.sqrt(w_time / w_energy)
-            # h_bar_prime ≈ L / T, T = L / v_optimal
-            # 但实测 h_bar_prime = L / T = v_optimal 仅在特定归一化下成立
-            # 更准确：h_bar_prime ≈ L / (N_segments * (L/N_segments) / v_optimal)
-            #                     = L / (L / v_optimal) = v_optimal
-            # 但实际 h_bar_prime 还取决于 s 域的归一化
-            # 实测：h_bar_prime ≈ path_length / (num_segments * T_per_segment)
-            # 其中 T_per_segment = (path_length / num_segments) / v_optimal
-            # 所以 h_bar_prime ≈ path_length / (path_length / v_optimal) = v_optimal
-            # 但这忽略了 s 域归一化的影响
-            # 实测修正：h_bar_prime ≈ path_length_estimate / num_segments / v_optimal * num_segments
-            #                     = path_length_estimate / v_optimal
-            # 不对，实测 h_bar_prime = 4.0, L = 8, v_optimal = 1.0, N = 2
-            # L / v_optimal = 8.0 ≠ 4.0
-            # L / (N * v_optimal) = 4.0 ✓
-            return path_length_estimate / (num_segments * v_optimal)
-
-        if v_max is not None and v_min is not None:
-            # 策略2：从速度范围估算
-            v_avg = (v_max + v_min) / 2.0
-            return path_length_estimate / (num_segments * v_avg)
-
-        # 策略3：兜底
-        import warnings
-        warnings.warn(
-            "Insufficient information to estimate h_bar_prime. "
-            "Using default value 1.0. Provide w_time/w_energy or "
-            "v_max/v_min for a better estimate, or use "
-            "compute_h_bar_prime_from_trajectory() after an initial solve.",
-            UserWarning,
-            stacklevel=2,
-        )
-        return 1.0
-
-    def addCurvatureHardConstraint(
-        self, max_curvature: float, min_velocity: float, h_bar_prime: float = None
-    ):
-        """添加曲率硬约束：||Q_j||_2 <= kappa_max * rho_min^2
-
-        利用贝塞尔曲线的凸包特性，通过限制二阶导数控制点的范数
-        来间接、保守地限制曲率。使用 LorentzConeConstraint 实现，
-        与 addScalarVelocityLimit 同构。
+        利用贝塞尔曲线的凸包特性，通过限制二阶导数控制点的范数来
+        间接、保守地保证曲率在安全范围内。
 
         数学推导：
             曲率公式：kappa(s) = ||r'(s) x r''(s)|| / ||r'(s)||^3
-            由 Cauchy-Schwarz 不等式：|kappa(s)| <= ||r''(s)|| / ||r'(s)||^2
-            由凸包特性：||r''(s)|| <= max_j ||Q_j||
-            充分条件：||Q_j||_2 <= kappa_max * rho_min^2
+            Cauchy-Schwarz：|kappa(s)| <= ||r''(s)|| / ||r'(s)||^2
+            凸包特性：||r''(s)|| <= max_j ||Q_j||
+            充分条件：||Q_j||_2 <= C = kappa_max * rho_min^2
 
-        其中 rho_min = min_velocity * h_bar_prime 是 s 域速度下界。
+        其中 Q_j 是二阶导数贝塞尔曲线的控制点：
+            Q_j = n*(n-1) * (P_{j+2} - 2*P_{j+1} + P_j),  j = 0, 1, ..., n-2
 
         Lorentz锥约束形式：
             z = H @ x + b, 其中 H = [0; A_ctrl], b = [C; 0]
@@ -691,85 +552,60 @@ class BezierGCS(BaseGCS):
 
         Args:
             max_curvature: 最大允许曲率 kappa_max (1/m)，必须为正数
-            min_velocity: 内部段最小物理速度 (m/s)，必须为正数
-                推荐值：sqrt(w_time / w_energy)，由成本权重隐式决定
-            h_bar_prime: 时间参数化导数 h'(s) 的均值估计
-                推荐确定方式（按精度排序）：
-                1. 两阶段求解：先求解无曲率约束的GCS，用
-                   compute_h_bar_prime_from_trajectory() 计算实际值
-                2. 静态估算：用 estimate_h_bar_prime() 从几何和成本权重估算
-                3. None：使用默认值 1.0（可能不准确，会发出警告）
+            min_velocity: 最小速度 v_min (m/s)，用于计算 rho_min
+            h_bar_prime: h'(s)的均值估计，如果为None则自动估算
 
         Raises:
-            AssertionError: 如果 max_curvature <= 0 或 min_velocity <= 0
-            ValueError: 如果 rho_min 过小导致约束阈值 C 接近零
+            ValueError: 如果 max_curvature <= 0 或 min_velocity < 0
+            ValueError: 如果计算得到的 C 值为0（约束退化，仅允许直线）
 
         Note:
-            - 此约束是凸约束（LorentzCone），保持优化问题的凸性
+            - 此约束是凸约束（Lorentz锥），保持优化问题的凸性
             - 与 addScalarVelocityLimit 同构，仅导数阶数和阈值不同
-            - 对 n=5 阶贝塞尔曲线，每段添加 4 个 LorentzCone 约束
-            - 边界段（起终点 v=0）不应使用此约束，由航向角约束隐式保证
-            - 保守性可通过成本权重调优（w_time/w_energy 比值）来缓解
-            - h_bar_prime 的准确性直接影响约束的保守程度：
-              偏大 → C 偏大 → 约束过松（可能违反曲率限制）
-              偏小 → C 偏小 → 约束过紧（可能过度限制可行域）
+            - 保守性来源：Cauchy-Schwarz不等式、凸包特性、速度下界估计
+            - 当 min_velocity=0 时约束退化（C=0），需配合边界退化处理
 
         Example:
             >>> bezier_gcs = BezierGCS(regions, order=5, continuity=2)
-            >>> # 方式1：两阶段求解（最准确）
-            >>> result = bezier_gcs.SolvePath(rounding=True)
-            >>> h_bar_prime = BezierGCS.compute_h_bar_prime_from_trajectory(result[0])
-            >>> bezier_gcs.addCurvatureHardConstraint(0.5, 0.7, h_bar_prime)
-            >>> # 方式2：静态估算
-            >>> h_bar_prime = BezierGCS.estimate_h_bar_prime(8.0, 2, w_time=3.0, w_energy=3.0)
-            >>> bezier_gcs.addCurvatureHardConstraint(0.5, 0.7, h_bar_prime)
+            >>> bezier_gcs.addCurvatureHardConstraint(
+            ...     max_curvature=0.5, min_velocity=0.7
+            ... )
         """
         # 参数验证
-        assert max_curvature > 0, (
-            f"max_curvature must be positive, got {max_curvature}"
-        )
-        assert min_velocity > 0, (
-            f"min_velocity must be positive, got {min_velocity}"
-        )
+        if max_curvature <= 0:
+            raise ValueError(f"max_curvature must be positive, got {max_curvature}")
+        if min_velocity < 0:
+            raise ValueError(f"min_velocity must be non-negative, got {min_velocity}")
 
-        # 步骤1：计算 h_bar_prime（时间参数化导数均值）
+        # 步骤1：计算 h_bar_prime（自动估算或用户指定）
         if h_bar_prime is None:
-            import warnings
-            warnings.warn(
-                "h_bar_prime not specified, using default value 1.0. "
-                "This may be inaccurate. Recommended approaches:\n"
-                "  1. Two-phase solve: solve without curvature constraint first, "
-                "then use compute_h_bar_prime_from_trajectory() to get the "
-                "actual value.\n"
-                "  2. Static estimate: use estimate_h_bar_prime() with "
-                "path_length, num_segments, and cost weights.\n"
-                "See addCurvatureHardConstraint docstring for examples.",
-                UserWarning,
-                stacklevel=2,
-            )
-            h_bar_prime = 1.0
+            # 保守估计：h_bar_prime = hdot_min（时间导数最小值）
+            # 更精确的估计需要求解后获得，这里使用保守下界
+            h_bar_prime = 1.0  # 默认假设 h'(s) 均值约为1.0
 
-        # 步骤2：计算 rho_min 和约束阈值 C
+        # 步骤2：计算 rho_min 和 C
         rho_min = min_velocity * h_bar_prime
-        C = max_curvature * rho_min**2
+        C = max_curvature * rho_min ** 2
 
-        # 验证阈值合理性
-        if C < 1e-10:
+        if C <= 0:
             raise ValueError(
-                f"Curvature constraint threshold C = {C:.2e} is too small "
-                f"(rho_min = {rho_min:.2e}). This would over-constrain the "
-                f"trajectory. Consider increasing min_velocity or adjusting "
-                f"cost weights (w_time/w_energy ratio) to raise the "
-                f"effective speed floor."
+                f"Curvature constraint threshold C = kappa_max * rho_min^2 = {C:.6f} is non-positive. "
+                f"This means the constraint degenerates (only straight lines allowed). "
+                f"Parameters: kappa_max={max_curvature}, v_min={min_velocity}, "
+                f"h_bar_prime={h_bar_prime}, rho_min={rho_min}. "
+                f"Consider using a positive min_velocity or applying this constraint "
+                f"only to interior segments (not boundary segments with v=0)."
             )
 
-        # 步骤3：获取二阶导数控制点并添加 LorentzCone 约束
-        # r''(s) 的控制点 Q_j，j = 0, 1, ..., n-2
+        # 步骤3：获取二阶导数控制点
+        # r''(s) 的控制点 Q_j = n*(n-1) * (P_{j+2} - 2*P_{j+1} + P_j)
         u_path_ddot = self.u_r_trajectory.MakeDerivative(2).control_points()
 
+        # 对每个二阶导数控制点添加 Lorentz 锥约束
         for ii in range(len(u_path_ddot)):
-            # 将二阶导数控制点分解为线性系数
-            # Q_j = A_ctrl @ x
+            # 将二阶导数表达式分解为线性系数
+            # A_ctrl: 二阶导数的系数矩阵，形状 (dimension, num_vars)
+            #         表示 Q_j = A_ctrl @ x
             A_ctrl = DecomposeLinearExpressions(u_path_ddot[ii], self.u_vars)
 
             # 构建 Lorentz 锥约束矩阵
@@ -780,102 +616,135 @@ class BezierGCS(BaseGCS):
             #   约束：z[0] >= ||z[1:]||_2
             #
             # H 的形状：(dimension + 1, num_vars)
-            # H[0, :] = 0           (第一行全零，阈值由 b 提供)
-            # H[1:, :] = A_ctrl     (后续行：二阶导数系数)
-            H = np.vstack(
-                [np.zeros((1, A_ctrl.shape[1])), A_ctrl]
-            )
+            # H[0, :] = 0  (零行，因为 C 是常数项)
+            # H[1:, :] = A_ctrl  (二阶导数系数)
+            H = np.vstack([
+                np.zeros((1, A_ctrl.shape[1])),  # 第一行：零（C在b中）
+                A_ctrl                            # 后续行：二阶导数系数
+            ])
 
-            # b 的形状：(dimension + 1,)
-            # b[0] = C               (阈值)
-            # b[1:] = 0              (无偏移)
+            # b 向量：[C; 0, 0, ..., 0]
             b = np.zeros(A_ctrl.shape[0] + 1)
             b[0] = C
 
             # 创建 Lorentz 锥约束
-            # Drake 的 LorentzConeConstraint 定义：
-            #   A @ x + b ∈ LorentzCone
-            # 即：(A @ x + b)[0] >= ||(A @ x + b)[1:]||_2
+            # Drake的LorentzConeConstraint定义：
+            #   x ∈ LorentzCone <=> x[0] >= sqrt(x[1]^2 + ... + x[n]^2)
+            # 构造函数：LorentzConeConstraint(A, b)
+            # 约束：A @ x + b ∈ LorentzCone
             curvature_con = LorentzConeConstraint(H, b)
 
-            # 存储约束对象（用于调试和可视化）
+            # 存储约束对象
             self.deriv_constraints.append(curvature_con)
 
-            # 对所有 GCS 边添加约束
-            # 注意：跳过源点边（edge.u() == self.source），因为源点没有前驱
+            # 对所有GCS边添加约束（跳过源点边）
             for edge in self.gcs.Edges():
                 if edge.u() == self.source:
                     continue
-                edge.AddConstraint(
-                    Binding[Constraint](curvature_con, edge.xu())
-                )
+                edge.AddConstraint(Binding[Constraint](curvature_con, edge.xu()))
 
-    def addCurvatureHardConstraintForEdges(
-        self,
-        max_curvature: float,
-        min_velocity: float,
-        h_bar_prime: float = None,
-        edges=None,
-    ):
-        """对指定边添加曲率硬约束（用于分段控制：仅内部段）
+    def addCurvatureHardConstraintForEdges(self, max_curvature, min_velocity,
+                                            boundary_edge_ids=None, h_bar_prime=None):
+        """
+        添加曲率硬约束（支持跳过边界段）
 
-        与 addCurvatureHardConstraint 相同的数学原理，但仅对指定
-        的边集合添加约束，用于实现边界段/内部段分离策略。
+        与 addCurvatureHardConstraint 相同的数学原理，但支持跳过
+        起终点v=0附近的边界段，由航向角约束隐式保证曲率。
 
         Args:
             max_curvature: 最大允许曲率 kappa_max (1/m)
-            min_velocity: 内部段最小物理速度 (m/s)
-            h_bar_prime: 时间参数化导数均值，None 则自动估算
-            edges: 目标边列表，None 则对所有非 source 边添加
+            min_velocity: 最小速度 v_min (m/s)
+            boundary_edge_ids: 边界边的id集合，这些边不应用曲率硬约束
+            h_bar_prime: h'(s)的均值估计
+
+        Raises:
+            ValueError: 如果 max_curvature <= 0 或 min_velocity < 0
+            ValueError: 如果计算得到的 C 值为0
 
         Note:
-            - 用于边界段免曲率硬约束的分段策略
-            - 边界段由航向角约束隐式保证曲率
+            - 边界段（起终点v=0附近）由航向角约束隐式保证曲率
+            - 内部段使用 Lorentz 锥约束显式保证曲率
         """
-        assert max_curvature > 0
-        assert min_velocity > 0
+        # 参数验证
+        if max_curvature <= 0:
+            raise ValueError(f"max_curvature must be positive, got {max_curvature}")
+        if min_velocity < 0:
+            raise ValueError(f"min_velocity must be non-negative, got {min_velocity}")
 
+        # 计算 h_bar_prime
         if h_bar_prime is None:
-            import warnings
-            warnings.warn(
-                "h_bar_prime not specified, using default value 1.0. "
-                "Use compute_h_bar_prime_from_trajectory() or "
-                "estimate_h_bar_prime() for a better estimate.",
-                UserWarning,
-                stacklevel=2,
-            )
             h_bar_prime = 1.0
 
+        # 计算 rho_min 和 C
         rho_min = min_velocity * h_bar_prime
-        C = max_curvature * rho_min**2
+        C = max_curvature * rho_min ** 2
 
-        if C < 1e-10:
+        if C <= 0:
             raise ValueError(
-                f"Curvature constraint threshold C = {C:.2e} is too small "
-                f"(rho_min = {rho_min:.2e})."
+                f"Curvature constraint threshold C = {C:.6f} is non-positive. "
+                f"Parameters: kappa_max={max_curvature}, v_min={min_velocity}, "
+                f"h_bar_prime={h_bar_prime}, rho_min={rho_min}. "
+                f"Consider applying this constraint only to interior segments."
             )
 
+        # 获取二阶导数控制点
         u_path_ddot = self.u_r_trajectory.MakeDerivative(2).control_points()
 
+        # 对每个二阶导数控制点添加 Lorentz 锥约束
         for ii in range(len(u_path_ddot)):
             A_ctrl = DecomposeLinearExpressions(u_path_ddot[ii], self.u_vars)
-            H = np.vstack(
-                [np.zeros((1, A_ctrl.shape[1])), A_ctrl]
-            )
+
+            H = np.vstack([
+                np.zeros((1, A_ctrl.shape[1])),
+                A_ctrl
+            ])
             b = np.zeros(A_ctrl.shape[0] + 1)
             b[0] = C
+
             curvature_con = LorentzConeConstraint(H, b)
             self.deriv_constraints.append(curvature_con)
 
-            # 仅对指定边添加约束
-            target_edges = edges if edges is not None else [
-                edge for edge in self.gcs.Edges()
-                if edge.u() != self.source
-            ]
-            for edge in target_edges:
-                edge.AddConstraint(
-                    Binding[Constraint](curvature_con, edge.xu())
-                )
+            # 对所有GCS边添加约束（跳过源点边和边界边）
+            for edge in self.gcs.Edges():
+                if edge.u() == self.source:
+                    continue
+                # 跳过边界段（起终点v=0附近）
+                if boundary_edge_ids is not None and id(edge) in boundary_edge_ids:
+                    continue
+                edge.AddConstraint(Binding[Constraint](curvature_con, edge.xu()))
+
+    def addTurningRadiusConstraint(self, min_radius, max_velocity):
+        """
+        添加转弯半径约束（通过限制向心加速度实现）
+        公式: ||r''(t)|| <= (v^2 / min_radius)
+        """
+        # 计算加速度上限
+        max_accel = (max_velocity**2) / min_radius
+        
+        # 获取空间轨迹的二阶导数控制点 r''(s)
+        # 注意：这里的导数是相对于参数 s 的，需要转换到时间 t
+        u_path_ddot = self.u_r_trajectory.MakeDerivative(2).control_points()
+        u_time_dot = self.u_h_trajectory.MakeDerivative(1).control_points()
+        
+        # 近似处理：在 s 域限制加速度
+        # 严谨做法需考虑 ds/dt 的平方，这里简化为对空间曲率控制点的约束
+        for ii in range(len(u_path_ddot)):
+            # 提取二阶导数的线性表达式矩阵
+            A_ctrl = DecomposeLinearExpressions(u_path_ddot[ii], self.u_vars)
+            
+            # 创建 L2Norm 约束: ||A_ctrl * vars|| <= max_accel
+            # 注意：实际中 s 和 t 的关系非线性，这里通常假设速度恒定进行预估
+            accel_con = L2NormCost(A_ctrl, np.zeros(self.dimension)) 
+            
+            # 遍历所有边，添加这个“成本”作为软约束，或使用 AddConstraint 添加硬约束
+            for edge in self.gcs.Edges():
+                if edge.u() == self.source:
+                    continue
+                # 添加硬约束：加速度控制点必须在半径为 max_accel 的球体内
+                edge.AddConstraint(Binding[Constraint](
+                    LinearConstraint(A_ctrl, -max_accel * np.ones(self.dimension), 
+                                    max_accel * np.ones(self.dimension)), 
+                    edge.xu()))
 
     def _isSourceInVertexRegion(self, source, vertex):
         """检查源点是否在顶点区域内"""

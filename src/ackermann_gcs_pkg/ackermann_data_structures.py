@@ -147,6 +147,13 @@ class EndpointState:
         return data
 
 
+class CurvatureConstraintMode(Enum):
+    """曲率约束模式枚举"""
+    NONE = "none"            # 无曲率硬约束（仅评估检查）
+    HARD = "hard"            # 凸硬约束（Lorentz锥，保守但可靠）
+    TURNING_RADIUS = "turning_radius"  # 旧转弯半径约束（盒约束，已弃用）
+
+
 @dataclass
 class TrajectoryConstraints:
     """
@@ -157,11 +164,17 @@ class TrajectoryConstraints:
         max_acceleration: 最大加速度（米/秒²）
         max_curvature: 最大曲率（1/米）
         workspace_regions: 工作空间区域（HPolyhedron列表）
+        enable_curvature_hard_constraint: 是否启用曲率硬约束
+        min_velocity: 最小速度（米/秒），用于曲率硬约束计算rho_min
+        curvature_constraint_mode: 曲率约束模式
     """
     max_velocity: float
     max_acceleration: float
     max_curvature: float
     workspace_regions: Optional[List] = None
+    enable_curvature_hard_constraint: bool = False
+    min_velocity: float = 0.7
+    curvature_constraint_mode: str = "none"
 
     def __post_init__(self):
         """参数验证"""
@@ -171,6 +184,17 @@ class TrajectoryConstraints:
             raise ValueError(f"max_acceleration must be positive, got {self.max_acceleration}")
         if self.max_curvature <= 0:
             raise ValueError(f"max_curvature must be positive, got {self.max_curvature}")
+        if self.min_velocity < 0:
+            raise ValueError(f"min_velocity must be non-negative, got {self.min_velocity}")
+        valid_modes = [m.value for m in CurvatureConstraintMode]
+        if self.curvature_constraint_mode not in valid_modes:
+            raise ValueError(
+                f"curvature_constraint_mode must be one of {valid_modes}, "
+                f"got {self.curvature_constraint_mode}"
+            )
+        # 当启用硬约束时，自动设置模式
+        if self.enable_curvature_hard_constraint and self.curvature_constraint_mode == "none":
+            self.curvature_constraint_mode = "hard"
 
     @classmethod
     def fromdict(cls, data: Dict) -> 'TrajectoryConstraints':

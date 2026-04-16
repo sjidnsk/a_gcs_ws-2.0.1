@@ -165,6 +165,40 @@ class AckermannGCSPlanner:
         # 原有矢量约束（已弃用，保留作为参考）
         # bezier_gcs.addVelocityLimits(np.zeros(2), np.full(2, constraints.max_velocity))
 
+        # 步骤4.5：添加曲率硬约束（如果启用）
+        if constraints.enable_curvature_hard_constraint or \
+           constraints.curvature_constraint_mode == "hard":
+            if verbose:
+                print("\n" + "=" * 70)
+                print("曲率硬约束添加")
+                print("=" * 70)
+                print(f"约束类型: 凸硬约束（Lorentz锥）")
+                print(f"约束形式: ||Q_j||_2 <= C = kappa_max * rho_min^2")
+                print(f"最大曲率: {constraints.max_curvature:.4f} 1/m")
+                print(f"最小速度: {constraints.min_velocity:.4f} m/s")
+                rho_min = constraints.min_velocity * 1.0  # h_bar_prime默认1.0
+                C = constraints.max_curvature * rho_min ** 2
+                print(f"rho_min: {rho_min:.4f}")
+                print(f"约束阈值 C: {C:.6f}")
+                print(f"凸性保证: 二阶锥约束（Lorentz锥）")
+                print(f"保守性: Cauchy-Schwarz + 凸包 + 速度下界")
+                if constraints.min_velocity > 0:
+                    alpha = (constraints.max_velocity / constraints.min_velocity) ** 2
+                    print(f"保守因子 alpha: {alpha:.1f}")
+                print("=" * 70)
+
+            try:
+                bezier_gcs.addCurvatureHardConstraint(
+                    max_curvature=constraints.max_curvature,
+                    min_velocity=constraints.min_velocity,
+                )
+                if verbose:
+                    print("✓ 曲率硬约束添加完成")
+            except ValueError as e:
+                if verbose:
+                    print(f"⚠️  曲率硬约束添加失败: {e}")
+                    print("   将跳过曲率硬约束，仅使用成本项软引导")
+
         # 步骤5：添加成本函数
         if verbose:
             print("[Planner] Adding cost functions...")
@@ -206,22 +240,84 @@ class AckermannGCSPlanner:
         #     )
         # [2025-04-06] 曲率成本功能暂时禁用 - 结束
 
-        # 步骤6：初始化AckermannSCPSolver
-        if verbose:
-            print("[Planner] Initializing AckermannSCPSolver...")
-
-        scp_solver = AckermannSCPSolver(
-            bezier_gcs=bezier_gcs,
-            vehicle_params=self.vehicle_params,
-            scp_config=self.scp_config,
-            constraints=constraints,  # 新增：传递约束参数
+        # 步骤6/7：求解轨迹
+        # 当曲率硬约束启用时，曲率已由Lorentz锥凸约束保证，
+        # 无需SCP迭代线性化曲率约束，直接用GCS凸松弛求解
+        use_curvature_hard_constraint = (
+            constraints.enable_curvature_hard_constraint or
+            constraints.curvature_constraint_mode == "hard"
         )
 
-        # 步骤7：SCP迭代求解
-        if verbose:
-            print("[Planner] Solving with SCP...")
+        if use_curvature_hard_constraint:
+            # 曲率硬约束路径：多次GCS求解，选择曲率违反最小的轨迹
+            # GCS rounding具有随机性，多次求解可提高可行率
+            max_solve_attempts = 3
+            if verbose:
+                print(f"[Planner] 曲率硬约束已启用，跳过SCP迭代，"
+                      f"GCS求解（最多{max_solve_attempts}次尝试）...")
 
-        trajectory, converged = scp_solver.solve(verbose=verbose)
+            best_trajectory = None
+            best_curvature_violation = np.inf
+            best_attempt = 0
+
+            for attempt in range(max_solve_attempts):
+                result = bezier_gcs.SolvePathWithConstraints(
+                    rounding=True, preprocessing=True, verbose=(verbose and attempt == 0)
+                )
+                trajectory_candidate = result[0] if result is not None else None
+
+                if trajectory_candidate is None:
+                    continue
+
+                # 评估曲率违反量
+                try:
+                    report = self.evaluator.evaluate_trajectory(
+                        trajectory_candidate, constraints
+                    )
+                    curv_viol = 0.0
+                    if report.curvature_violation:
+                        curv_viol = report.curvature_violation.max_violation
+                except Exception:
+                    curv_viol = np.inf
+
+                if verbose and attempt > 0:
+                    print(f"  尝试 {attempt+1}: κ_viol={curv_viol:.6f}")
+
+                # 选择曲率违反最小的轨迹
+                if curv_viol < best_curvature_violation:
+                    best_curvature_violation = curv_viol
+                    best_trajectory = trajectory_candidate
+                    best_attempt = attempt + 1
+
+                # 如果已找到可行解，提前退出
+                if best_curvature_violation < 1e-4:
+                    break
+
+            trajectory = best_trajectory
+            converged = trajectory is not None
+
+            if verbose:
+                if trajectory is not None:
+                    print(f"[Planner] ✓ GCS求解成功（尝试{best_attempt}/{max_solve_attempts}，"
+                          f"κ_viol={best_curvature_violation:.6f}）")
+                else:
+                    print("[Planner] ✗ GCS求解失败")
+        else:
+            # 标准路径：SCP迭代求解
+            if verbose:
+                print("[Planner] Initializing AckermannSCPSolver...")
+
+            scp_solver = AckermannSCPSolver(
+                bezier_gcs=bezier_gcs,
+                vehicle_params=self.vehicle_params,
+                scp_config=self.scp_config,
+                constraints=constraints,
+            )
+
+            if verbose:
+                print("[Planner] Solving with SCP...")
+
+            trajectory, converged = scp_solver.solve(verbose=verbose)
 
         if trajectory is None:
             solve_time = time.time() - start_time
@@ -234,7 +330,7 @@ class AckermannGCSPlanner:
                 trajectory=None,
                 trajectory_report=None,
                 solve_time=solve_time,
-                num_iterations=scp_solver.iteration,
+                num_iterations=0 if use_curvature_hard_constraint else scp_solver.iteration,
                 convergence_reason="solve_failed",
                 error_message="Failed to solve trajectory",
             )
@@ -244,6 +340,29 @@ class AckermannGCSPlanner:
             print("[Planner] Evaluating trajectory...")
 
         trajectory_report = self.evaluator.evaluate_trajectory(trajectory, constraints)
+
+        # 步骤7.5：后验验证边界段曲率（如果启用了曲率硬约束）
+        if constraints.enable_curvature_hard_constraint or \
+           constraints.curvature_constraint_mode == "hard":
+            if trajectory_report.curvature_violation and \
+               trajectory_report.curvature_violation.is_violated:
+                if verbose:
+                    print("\n" + "=" * 70)
+                    print("曲率后验验证")
+                    print("=" * 70)
+                    print(f"⚠️  曲率约束违反！最大违反量: "
+                          f"{trajectory_report.curvature_violation.max_violation:.6f}")
+                    print("可能原因：")
+                    print("  1. 边界段（v=0附近）曲率超限")
+                    print("  2. 保守性不足：min_velocity设置过低")
+                    print("  3. 成本权重不当：w_time/w_energy比值过小导致速度过低")
+                    print("调参建议：")
+                    print("  - 增大 min_velocity（当前: {:.4f}）".format(
+                        constraints.min_velocity))
+                    print("  - 增大 w_time/w_energy 比值（推荐 0.5~2.5）")
+                    print("  - 增大二阶正则化权重 w_reg2（推荐 5.0~10.0）")
+                    print("  - 使用曲率约束预设: curvature_constrained")
+                    print("=" * 70)
 
         # 新增：计算曲率统计
         if trajectory is not None:
@@ -282,10 +401,14 @@ class AckermannGCSPlanner:
 
         # 步骤9：返回规划结果
         solve_time = time.time() - start_time
+        num_iterations = 0 if use_curvature_hard_constraint else scp_solver.iteration
 
         if verbose:
             print(f"[Planner] Total solve time: {solve_time:.2f}s")
-            print(f"[Planner] SCP iterations: {scp_solver.iteration}")
+            if use_curvature_hard_constraint:
+                print(f"[Planner] Solver: GCS convex relaxation (curvature hard constraint)")
+            else:
+                print(f"[Planner] SCP iterations: {num_iterations}")
             print(f"[Planner] Converged: {converged}")
 
         convergence_reason = "converged" if converged else "max_iterations_reached"
@@ -295,7 +418,7 @@ class AckermannGCSPlanner:
             trajectory=trajectory,
             trajectory_report=trajectory_report,
             solve_time=solve_time,
-            num_iterations=scp_solver.iteration,
+            num_iterations=num_iterations,
             convergence_reason=convergence_reason,
             error_message="",
         )

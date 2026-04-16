@@ -376,8 +376,7 @@ class CurvatureCostModule:
         self,
         bezier_gcs,
         weight: float,
-        verbose: bool,
-        edges=None,
+        verbose: bool
     ) -> None:
         """
         使用凸松弛方法添加曲率成本
@@ -391,19 +390,20 @@ class CurvatureCostModule:
             bezier_gcs: BezierGCS对象
             weight: 权重
             verbose: 是否输出调试信息
-            edges: 指定添加成本的边列表（方案C分段差异化）。
-                若为None，则对所有非source边添加。
         """
         if verbose:
-            edge_info = f" ({len(edges)} edges)" if edges is not None else " (all edges)"
-            print(f"  Adding convex relaxed curvature cost (weight={weight}){edge_info}...")
+            print(f"  Adding convex relaxed curvature cost (weight={weight})...")
             print(f"    Method: speed-weighted second derivative squared")
             print(f"    J_relaxed = ∫||r''(s)||² ds")
 
+        # 使用BezierGCS的addPathEnergyCost或类似方法
+        # 这里假设bezier_gcs有相应的方法
         try:
+            # 尝试添加路径能量成本（二阶导数平方积分）
             if hasattr(bezier_gcs, 'addPathEnergyCost'):
-                bezier_gcs.addPathEnergyCost(weight, edges=edges)
+                bezier_gcs.addPathEnergyCost(weight)
             elif hasattr(bezier_gcs, 'add_derivative_cost'):
+                # 添加二阶导数成本
                 bezier_gcs.add_derivative_cost(order=2, weight=weight)
             else:
                 if verbose:
@@ -519,8 +519,7 @@ class CurvatureCostModule:
         self,
         bezier_gcs,
         weight: float,
-        verbose: bool = True,
-        edges=None,
+        verbose: bool = True
     ) -> bool:
         """
         将曲率导数成本添加到GCS
@@ -531,12 +530,11 @@ class CurvatureCostModule:
             bezier_gcs: BezierGCS对象
             weight: 成本权重
             verbose: 是否输出调试信息
-            edges: 指定添加成本的边列表（方案C分段差异化）
 
         Returns:
             是否成功添加
         """
-        return self.derivative_cost.add_to_gcs(bezier_gcs, weight, verbose, edges=edges)
+        return self.derivative_cost.add_to_gcs(bezier_gcs, weight, verbose)
 
     def add_curvature_peak_cost_to_gcs(
         self,
@@ -581,122 +579,3 @@ class CurvatureCostModule:
     def clear_gradient_cache(self) -> None:
         """清除梯度计算缓存"""
         self.gradient_calculator.clear_cache()
-
-    def add_segmented_curvature_cost_to_gcs(
-        self,
-        bezier_gcs,
-        boundary_weights: CurvatureCostWeights,
-        internal_weights: CurvatureCostWeights,
-        boundary_edges: list,
-        internal_edges: list,
-        transition_edges: Optional[list] = None,
-        transition_weights: Optional[CurvatureCostWeights] = None,
-        verbose: bool = True,
-    ) -> None:
-        """将分段差异化曲率成本添加到GCS优化问题（方案C）
-
-        边界段和内部段使用不同的曲率成本权重，过渡段使用插值权重。
-        这使得边界段（航向角约束生效处）和内部段可以有不同的曲率优化策略。
-
-        Args:
-            bezier_gcs: BezierGCS对象
-            boundary_weights: 边界段曲率成本权重
-            internal_weights: 内部段曲率成本权重
-            boundary_edges: 边界段边列表
-            internal_edges: 内部段边列表
-            transition_edges: 过渡段边列表（可选）
-            transition_weights: 过渡段曲率成本权重（可选，默认取边界和内部的均值）
-            verbose: 是否输出调试信息
-        """
-        if verbose:
-            print("[CurvatureCost] Adding segmented curvature costs (Plan C)...")
-            print(f"  Boundary edges: {len(boundary_edges)}")
-            print(f"  Internal edges: {len(internal_edges)}")
-            if transition_edges:
-                print(f"  Transition edges: {len(transition_edges)}")
-
-        # 边界段曲率成本
-        if boundary_weights.is_enabled() and boundary_edges:
-            self._add_segment_curvature_cost(
-                bezier_gcs, boundary_weights, boundary_edges,
-                "boundary", verbose,
-            )
-
-        # 内部段曲率成本
-        if internal_weights.is_enabled() and internal_edges:
-            self._add_segment_curvature_cost(
-                bezier_gcs, internal_weights, internal_edges,
-                "internal", verbose,
-            )
-
-        # 过渡段曲率成本（使用插值权重）
-        if transition_edges:
-            if transition_weights is None:
-                transition_weights = CurvatureCostWeights(
-                    curvature_squared=(
-                        boundary_weights.curvature_squared
-                        + internal_weights.curvature_squared
-                    )
-                    / 2,
-                    curvature_derivative=(
-                        boundary_weights.curvature_derivative
-                        + internal_weights.curvature_derivative
-                    )
-                    / 2,
-                    curvature_peak=0.0,
-                )
-            if transition_weights.is_enabled():
-                self._add_segment_curvature_cost(
-                    bezier_gcs, transition_weights, transition_edges,
-                    "transition", verbose,
-                )
-
-    def _add_segment_curvature_cost(
-        self,
-        bezier_gcs,
-        weights: CurvatureCostWeights,
-        edges: list,
-        segment_name: str,
-        verbose: bool,
-    ) -> None:
-        """为指定段的边添加曲率成本
-
-        Args:
-            bezier_gcs: BezierGCS对象
-            weights: 成本权重
-            edges: 边列表
-            segment_name: 段名称（用于日志）
-            verbose: 是否输出调试信息
-        """
-        if verbose:
-            print(f"  [{segment_name}] Adding curvature cost to {len(edges)} edges")
-
-        # 曲率平方积分成本
-        if weights.curvature_squared > 0:
-            if self.config.enable_convex_relaxation:
-                self._add_convex_relaxed_curvature_cost(
-                    bezier_gcs, weights.curvature_squared, verbose, edges=edges
-                )
-            else:
-                if verbose:
-                    print(f"  [{segment_name}] Non-convex curvature cost requires SCP.")
-
-        # 曲率导数平方积分成本
-        if weights.curvature_derivative > 0:
-            try:
-                self.derivative_cost.add_to_gcs(
-                    bezier_gcs, weights.curvature_derivative, verbose, edges=edges
-                )
-            except Exception as e:
-                if verbose:
-                    print(f"  [{segment_name}] Failed to add derivative cost: {e}")
-
-        # 曲率峰值惩罚成本
-        if weights.curvature_peak > 0:
-            try:
-                self.peak_cost.add_to_gcs(
-                    bezier_gcs, weights.curvature_peak, None, verbose
-                )
-            except Exception as e:
-                if verbose:
-                    print(f"  [{segment_name}] Failed to add peak cost: {e}")

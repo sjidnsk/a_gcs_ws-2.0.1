@@ -43,27 +43,23 @@ class CurvatureStatistics:
         order: int = 2
     ) -> Tuple[np.ndarray, ...]:
         """
-        计算轨迹在物理时间t处的导数
-
-        使用 EvalDerivative 方法正确处理时间参数化，
-        而非 derivative().value() （后者在参数域外推会产生错误结果）。
+        计算轨迹在时间t处的导数
 
         Args:
-            trajectory: 轨迹对象（BezierTrajectory）
-            t: 物理时间值
+            trajectory: 轨迹对象（BsplineTrajectory）
+            t: 时间参数值
             order: 导数阶数
 
         Returns:
             导数元组
         """
-        # 优先使用 EvalDerivative（正确处理时间参数化）
+        # 优先使用EvalDerivative（与flat_output_mapper一致）
         if hasattr(trajectory, 'EvalDerivative'):
-            first_deriv = trajectory.EvalDerivative(t, 1)
+            first_deriv = trajectory.EvalDerivative(t, 1).flatten()
             if order >= 2:
-                second_deriv = trajectory.EvalDerivative(t, 2)
+                second_deriv = trajectory.EvalDerivative(t, 2).flatten()
                 return first_deriv, second_deriv
             return (first_deriv,)
-        # 回退：使用 derivative().value()
         elif hasattr(trajectory, 'derivative'):
             first_deriv = trajectory.derivative(1).value(t)
             if order >= 2:
@@ -71,6 +67,7 @@ class CurvatureStatistics:
                 return first_deriv, second_deriv
             return (first_deriv,)
         elif hasattr(trajectory, 'CalcValue') and hasattr(trajectory, 'CalcDerivative'):
+            # Drake风格的API
             first_deriv = trajectory.CalcDerivative(t, 1)
             if order >= 2:
                 second_deriv = trajectory.CalcDerivative(t, 2)
@@ -102,13 +99,13 @@ class CurvatureStatistics:
         t: float
     ) -> float:
         """
-        计算轨迹在物理时间t处的曲率
+        计算轨迹在时间t处的曲率
 
         曲率公式：κ = (ẋÿ - ẏẍ) / (ẋ² + ẏ²)^(3/2)
 
         Args:
             trajectory: 轨迹对象
-            t: 物理时间值
+            t: 时间参数值
 
         Returns:
             曲率值
@@ -146,20 +143,15 @@ class CurvatureStatistics:
         Returns:
             曲率统计信息
         """
-        # 采样轨迹参数 s ∈ [start_time, end_time]
-        # 使用轨迹的实际时间区间，而非硬编码 [0, 1]
-        if hasattr(trajectory, 'start_time') and hasattr(trajectory, 'end_time'):
-            t_start = trajectory.start_time()
-            t_end = trajectory.end_time()
-        else:
-            t_start = 0.0
-            t_end = 1.0
-        s_array = np.linspace(t_start, t_end, self.num_samples)
+        # 采样轨迹时间范围 [start_time, end_time]
+        t_start = trajectory.start_time()
+        t_end = trajectory.end_time()
+        t_array = np.linspace(t_start, t_end, self.num_samples)
 
         # 计算每个采样点的曲率
         kappa_array = np.array([
-            self._compute_curvature_at_point(trajectory, s)
-            for s in s_array
+            self._compute_curvature_at_point(trajectory, t)
+            for t in t_array
         ])
 
         # 统计计算
@@ -170,7 +162,7 @@ class CurvatureStatistics:
 
         # 找到最大曲率位置
         max_idx = np.argmax(np.abs(kappa_array))
-        max_curvature_location = s_array[max_idx]
+        max_curvature_location = t_array[max_idx]
 
         return CurvatureStats(
             max_curvature=max_kappa,
@@ -251,15 +243,9 @@ class CurvatureStatistics:
         Returns:
             (s_array, kappa_array): 参数数组和曲率数组
         """
-        if hasattr(trajectory, 'start_time') and hasattr(trajectory, 'end_time'):
-            t_start = trajectory.start_time()
-            t_end = trajectory.end_time()
-        else:
-            t_start = 0.0
-            t_end = 1.0
-        s_array = np.linspace(t_start, t_end, num_samples)
+        s_array = np.linspace(trajectory.start_time(), trajectory.end_time(), num_samples)
         kappa_array = np.array([
-            self._compute_curvature_at_point(trajectory, s)
-            for s in s_array
+            self._compute_curvature_at_point(trajectory, t)
+            for t in s_array
         ])
         return s_array, kappa_array

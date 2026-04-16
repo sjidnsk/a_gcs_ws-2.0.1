@@ -97,6 +97,8 @@ class AckermannBezierGCS(BezierGCS):
         target_heading: float,
         config: Optional[HeadingConstraintConfig] = None,
         verbose: bool = True,
+        source_is_v0: bool = False,
+        target_is_v0: bool = False,
     ) -> None:
         """
         添加航向角约束
@@ -107,11 +109,17 @@ class AckermannBezierGCS(BezierGCS):
         2. 线性化方法（传统）：使用tan(θ)形式
            约束：(P₁[y] - P₀[y]) = tan(θ)·(P₁[x] - P₀[x])
 
+        当v=0时，使用逐对选择性禁用点积约束：
+        - 仅对退化对（第一对P₁-P₀）禁用点积约束
+        - 对非退化对保留完整约束（叉积+点积）
+
         Args:
             source_heading: 起点航向角（弧度）
             target_heading: 终点航向角（弧度）
             config: 航向角约束配置，如果为None则使用默认配置
             verbose: 是否输出调试信息
+            source_is_v0: 起点速度是否为0（v=0时第一对控制点退化）
+            target_is_v0: 终点速度是否为0（v=0时第一对控制点退化）
         """
         # 使用传入配置或默认配置
         if config is None:
@@ -127,6 +135,10 @@ class AckermannBezierGCS(BezierGCS):
             print(f"终点航向角: {np.degrees(target_heading):.2f}° ({target_heading:.4f} rad)")
             print(f"多控制点约束: {'启用' if config.enable_multi_point else '禁用'}")
             print(f"控制点数量: {config.num_control_points}")
+            if source_is_v0:
+                print(f"  起点v=0: 逐对禁用第一对点积约束")
+            if target_is_v0:
+                print(f"  终点v=0: 逐对禁用第一对点积约束")
         
         # 获取边上的变量
         u_control = self.u_r_trajectory.control_points()
@@ -196,13 +208,24 @@ class AckermannBezierGCS(BezierGCS):
                 # 方向约束说明
                 if config.enable_direction_constraint:
                     print("\n方向约束（点积形式）:")
-                    print(f"  起点: (P₁-P₀)·d_θ ≥ ε")
-                    print(f"        ε = {config.direction_epsilon}")
-                    print(f"  终点: (Pₙ-Pₙ₋₁)·d_θ ≥ ε")
+                    if source_is_v0:
+                        print(f"  起点: v=0，第一对(P₁-P₀)禁用点积约束（退化）")
+                        print(f"        后续对保留点积约束: (Pᵢ-Pᵢ₋₁)·d_θ ≥ ε")
+                    else:
+                        print(f"  起点: (P₁-P₀)·d_θ ≥ ε")
+                    if target_is_v0:
+                        print(f"  终点: v=0，第一对(Pₙ-Pₙ₋₁)禁用点积约束（退化）")
+                        print(f"        后续对保留点积约束: (Pᵢ-Pᵢ₋₁)·d_θ ≥ ε")
+                    else:
+                        print(f"  终点: (Pₙ-Pₙ₋₁)·d_θ ≥ ε")
                     print(f"        ε = {config.direction_epsilon}")
                     print("\n约束组合:")
                     print("  ✓ 叉积约束：保证方向共线（平行）")
-                    print("  ✓ 点积约束：保证方向朝向一致（同向）")
+                    if not source_is_v0 and not target_is_v0:
+                        print("  ✓ 点积约束：保证方向朝向一致（同向）")
+                    else:
+                        print("  ✓ 点积约束：非退化对保证方向朝向一致（同向）")
+                        print("  ✓ 退化对：由成本函数和C2连续性隐式保证同向")
                     print("  ✓ 两者结合：保证方向完全一致")
                 else:
                     print("\n方向约束: 禁用（仅使用叉积约束）")
@@ -230,27 +253,43 @@ class AckermannBezierGCS(BezierGCS):
                 else:
                     print(f"  终点: Pₙ[x] = Pₙ₋₁[x] (垂直方向)")
 
-        # 使用工厂创建约束（支持方向约束）
-        if config is None:
-            config = self.heading_constraint_config
-
-        # 创建起点约束
-        source_constraints = HeadingConstraintFactory.create_heading_constraints(
-            source_heading,
-            source_control_points,
-            self.u_vars,
-            config,
-            constraint_type='source'
-        )
-
-        # 创建终点约束
-        target_constraints = HeadingConstraintFactory.create_heading_constraints(
-            target_heading,
-            target_control_points,
-            self.u_vars,
-            config,
-            constraint_type='target'
-        )
+        # 使用逐对选择性禁用创建约束（v=0退化处理）
+        if config.method == HeadingConstraintMethod.ROTATION_MATRIX and \
+           config.enable_direction_constraint and \
+           (source_is_v0 or target_is_v0):
+            # 使用逐对选择性禁用点积约束
+            source_constraints = HeadingConstraintFactory.create_heading_constraints_per_pair(
+                source_heading,
+                source_control_points,
+                self.u_vars,
+                config,
+                constraint_type='source',
+                is_first_pair_degenerate=source_is_v0
+            )
+            target_constraints = HeadingConstraintFactory.create_heading_constraints_per_pair(
+                target_heading,
+                target_control_points,
+                self.u_vars,
+                config,
+                constraint_type='target',
+                is_first_pair_degenerate=target_is_v0
+            )
+        else:
+            # 标准路径：使用原有工厂方法
+            source_constraints = HeadingConstraintFactory.create_heading_constraints(
+                source_heading,
+                source_control_points,
+                self.u_vars,
+                config,
+                constraint_type='source'
+            )
+            target_constraints = HeadingConstraintFactory.create_heading_constraints(
+                target_heading,
+                target_control_points,
+                self.u_vars,
+                config,
+                constraint_type='target'
+            )
 
         # 包装约束为TypedConstraint
         typed_constraints = []
@@ -268,7 +307,10 @@ class AckermannBezierGCS(BezierGCS):
             if source_constraints:
                 print(f"  约束类型: {type(source_constraints[0]).__name__}")
             if config.enable_direction_constraint:
-                print(f"  方向约束: 启用")
+                if source_is_v0 or target_is_v0:
+                    print(f"  方向约束: 逐对选择性禁用（退化对禁用点积）")
+                else:
+                    print(f"  方向约束: 启用")
             else:
                 print(f"  方向约束: 禁用")
 
@@ -303,6 +345,7 @@ class AckermannBezierGCS(BezierGCS):
         添加起终点约束（包含航向角）
 
         整合位置约束、航向角约束、速度约束。
+        当起终点速度为0时，自动启用逐对选择性禁用点积约束。
 
         Args:
             source_position: 起点位置，形状为(2,)
@@ -314,6 +357,15 @@ class AckermannBezierGCS(BezierGCS):
             heading_config: 航向角约束配置，可选
             verbose: 是否输出调试信息
         """
+        # v=0退化判断阈值
+        v_threshold = 1e-6
+
+        # 判断起终点速度是否为0
+        source_is_v0 = (source_velocity is not None and
+                        np.linalg.norm(source_velocity) < v_threshold)
+        target_is_v0 = (target_velocity is not None and
+                        np.linalg.norm(target_velocity) < v_threshold)
+
         if verbose:
             print("\n" + "=" * 60)
             print("起终点约束添加")
@@ -324,8 +376,12 @@ class AckermannBezierGCS(BezierGCS):
             print(f"终点航向角: {np.degrees(target_heading):.2f}°")
             if source_velocity is not None:
                 print(f"起点速度: ({source_velocity[0]:.2f}, {source_velocity[1]:.2f})")
+                if source_is_v0:
+                    print(f"  起点v≈0: 将禁用退化对的点积约束")
             if target_velocity is not None:
                 print(f"终点速度: ({target_velocity[0]:.2f}, {target_velocity[1]:.2f})")
+                if target_is_v0:
+                    print(f"  终点v≈0: 将禁用退化对的点积约束")
         
         # 调用父类方法添加位置约束
         # 注意：velocity参数应该是形状为(2, 2)的numpy数组
@@ -346,8 +402,13 @@ class AckermannBezierGCS(BezierGCS):
             print("✓ 位置约束添加完成")
             print("\n添加航向角约束...")
         
-        # 添加航向角约束
-        self._add_heading_constraint(source_heading, target_heading, heading_config, verbose=verbose)
+        # 添加航向角约束（传递v=0退化信息）
+        self._add_heading_constraint(
+            source_heading, target_heading, heading_config,
+            verbose=verbose,
+            source_is_v0=source_is_v0,
+            target_is_v0=target_is_v0,
+        )
         
         if verbose:
             print("✓ 航向角约束添加完成")

@@ -142,8 +142,8 @@ class CostConfigurator:
             regularization_order=2
         ),
         # 曲率硬约束场景预设
-        # w_time/w_energy 比值控制在 0.5~2.5，使速度倾向 ~0.7~1.6 m/s
-        # 增大 regularization_r 限制 ||r''|| 上界，协同曲率约束
+        # w_time/w_energy比值控制速度水平，影响保守性
+        # regularization_r限制||r''||上界，协同曲率约束
         'curvature_constrained': CostWeights(
             time=3.0,
             path_length=1.5,
@@ -157,7 +157,7 @@ class CostConfigurator:
             path_length=1.0,
             energy=2.0,
             regularization_r=8.0,
-            regularization_h=0.3,
+            regularization_h=0.5,
             regularization_order=2
         ),
         'curvature_constrained_parking': CostWeights(
@@ -165,7 +165,7 @@ class CostConfigurator:
             path_length=2.0,
             energy=4.0,
             regularization_r=10.0,
-            regularization_h=1.0,
+            regularization_h=0.5,
             regularization_order=2
         ),
     }

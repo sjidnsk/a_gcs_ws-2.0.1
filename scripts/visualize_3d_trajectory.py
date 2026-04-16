@@ -41,7 +41,9 @@ from path_planner.scripts.hybrid_astar_gcs_planner import HybridAStarGCSPlanner
 from path_planner.scripts.planner_support import PlannerConfig
 # from tests.unit.test_hybrid_astar_gcs_planner import plan_path
 from ackermann_gcs_pkg.ackermann_gcs_planner import AckermannGCSPlanner
-from ackermann_gcs_pkg.ackermann_data_structures import BezierConfig, SCPConfig
+from ackermann_gcs_pkg.ackermann_data_structures import (
+    BezierConfig, SCPConfig, TrajectoryConstraints
+)
 from ackermann_gcs_pkg.flat_output_mapper import compute_flat_output_mapping
 
 # 导入输出管理器
@@ -131,6 +133,17 @@ def visualize_3d_trajectory_interactive(
     source = create_endpoint_state(start[:2], start[2])
     target = create_endpoint_state(goal[:2], goal[2])
     
+    # 构建轨迹约束（启用曲率硬约束）
+    constraints = TrajectoryConstraints(
+        max_velocity=vehicle_params.max_velocity,
+        max_acceleration=vehicle_params.max_acceleration,
+        max_curvature=vehicle_params.max_curvature,
+        workspace_regions=workspace_regions,
+        enable_curvature_hard_constraint=True,
+        min_velocity=2.0,  # 提高速度下界以收紧曲率约束
+        curvature_constraint_mode="hard",
+    )
+    
     ackermann_planner = AckermannGCSPlanner(
         vehicle_params=vehicle_params,
         bezier_config=BezierConfig(order=5, continuity=1),
@@ -141,15 +154,11 @@ def visualize_3d_trajectory_interactive(
         source=source,
         target=target,
         workspace_regions=workspace_regions,
-        constraints=None,
+        constraints=constraints,
         cost_weights={
-            "time": 1.0,
-            "path_length": 0.1,
-            "energy": 100.0,
-            # 曲率成本已禁用（非凸成本，需要凸松弛或SCP处理）
-            # "curvature_squared": 0.0,      # 曲率平方积分权重（已禁用）
-            # "curvature_derivative": 0.0,   # 曲率导数平方积分权重（已禁用）
-            # "curvature_peak": 0.0          # 曲率峰值惩罚权重（已禁用）
+            "time": 3.0,
+            "path_length": 1.5,
+            "energy": 3.0,
         },
         verbose=True  # 启用详细输出，显示约束信息
     )

@@ -622,77 +622,70 @@ class HeadingConstraintFactory:
         control_points: List[Tuple[Union[Variable, Expression], Union[Variable, Expression]]],
         variables: List[Variable],
         config: HeadingConstraintConfig,
-        is_first_pair_degenerate: bool = False,
-        constraint_type: Optional[str] = None
+        constraint_type: Optional[str] = None,
+        is_first_pair_degenerate: bool = False
     ) -> List[Union['LinearEqualityConstraint', 'LinearConstraint']]:
-        """逐对创建航向角约束，支持选择性禁用退化对的点积约束
+        """
+        创建航向角约束（逐对选择性禁用点积约束）
 
-        当 v=0 时，第一对控制点 (P1-P0) 退化（P1=P0），点积约束
-        (P1-P0)·d_theta >= epsilon 严格矛盾（0 >= epsilon 不成立）。
+        当v=0时，第一对控制点(P1-P0)退化为零向量，点积约束
+        (P1-P0)·d_theta >= epsilon 严格矛盾(0 >= epsilon)。
         此方法仅对退化对禁用点积约束，对非退化对保留完整约束。
 
-        约束策略：
-        - 退化对 (i=1 且 is_first_pair_degenerate=True):
-            仅叉积约束（共线），点积约束与 v=0 矛盾故禁用
-        - 非退化对 (i>1 或 is_first_pair_degenerate=False):
-            叉积约束 + 点积约束（完整方向约束）
-
         Args:
-            heading_angle: 航向角（弧度）
-            control_points: 控制点列表，每个元素为(x, y)坐标
-            variables: 决策变量列表
-            config: 航向角约束配置
-            is_first_pair_degenerate: 第一对控制点是否退化（v=0时为True）
+            heading_angle: 航向角
+            control_points: 控制点列表
+            variables: 决策变量
+            config: 约束配置
             constraint_type: 约束类型，'source'或'target'
+            is_first_pair_degenerate: 第一对控制点是否退化（v=0时P1=P0）
 
         Returns:
-            约束列表（叉积约束 + 选择性点积约束）
+            约束列表（叉积约束始终添加，点积约束仅对非退化对添加）
         """
-        if not DRAKE_AVAILABLE:
-            warnings.warn("Drake未安装，无法创建约束")
-            return []
-
-        constraints = []
-
-        # 确定约束数量
-        k = config.num_control_points if config.enable_multi_point else 1
-        k = min(k, len(control_points) - 1)
-
         # 创建叉积约束对象
         cross_constraint_obj = RotationMatrixHeadingConstraint(
             heading_angle, constraint_type=constraint_type
         )
 
-        # 创建点积约束对象
-        direction_constraint_obj = DirectionConstraint(
-            heading_angle,
-            epsilon=config.direction_epsilon,
-            constraint_type=constraint_type
-        )
+        # 确定约束数量
+        k = config.num_control_points if config.enable_multi_point else 1
+        k = min(k, len(control_points) - 1)
+
+        constraints = []
+
+        # 创建点积约束对象（如果需要）
+        if config.enable_direction_constraint:
+            direction_constraint_obj = DirectionConstraint(
+                heading_angle,
+                epsilon=config.direction_epsilon,
+                constraint_type=constraint_type
+            )
 
         for i in range(1, k + 1):
             p_prev_x, p_prev_y = control_points[i - 1]
             p_curr_x, p_curr_y = control_points[i]
 
             # 叉积约束：始终添加（共线约束）
-            cross_constraint = cross_constraint_obj.create_cross_product_constraint(
+            cross_con = cross_constraint_obj.create_cross_product_constraint(
                 p_prev_x, p_prev_y,
                 p_curr_x, p_curr_y,
                 variables
             )
-            if cross_constraint is not None:
-                constraints.append(cross_constraint)
+            if cross_con is not None:
+                constraints.append(cross_con)
 
             # 点积约束：仅对非退化对添加
-            is_degenerate = (i == 1 and is_first_pair_degenerate)
-            if config.enable_direction_constraint and not is_degenerate:
-                dot_constraint = direction_constraint_obj.create_dot_product_constraint(
-                    p_prev_x, p_prev_y,
-                    p_curr_x, p_curr_y,
-                    variables
-                )
-                if dot_constraint is not None:
-                    constraints.append(dot_constraint)
+            if config.enable_direction_constraint:
+                is_degenerate = (i == 1 and is_first_pair_degenerate)
+                if not is_degenerate:
+                    dot_con = direction_constraint_obj.create_dot_product_constraint(
+                        p_prev_x, p_prev_y,
+                        p_curr_x, p_curr_y,
+                        variables
+                    )
+                    if dot_con is not None:
+                        constraints.append(dot_con)
 
         return constraints
 
