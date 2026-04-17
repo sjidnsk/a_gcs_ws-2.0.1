@@ -69,8 +69,8 @@ class PlannerConfig:
     decompose_non_convex: bool = True
     decomposition_threshold: float = 0.8
     
-    # IRIS配置 - 推荐使用 IrisNpConfigOptimized
-    iris_config: Optional[Any] = None  # IrisNpConfigOptimized 实例
+    # IRIS配置 - 推荐使用 IrisNpConfig
+    iris_config: Optional[Any] = None  # IrisNpConfig 实例
     
     # IRIS参数（向后兼容，如果 iris_config 未提供则使用这些参数）
     iris_iteration_limit: int = 100
@@ -132,7 +132,7 @@ class PlannerConfig:
         if self.iris_config is None and OPTIMIZED_CONFIG_AVAILABLE:
             self.iris_config = get_high_safety_config()
             if self.iris_config is not None:
-                print("使用默认IRIS配置（IrisNpConfigOptimized）")
+                print("使用默认IRIS配置（IrisNpConfig）")
         
         # 自动计算最小转弯半径（如果未指定）
         if self.ackermann_r_min is None:

@@ -58,7 +58,7 @@ from ackermann_gcs_pkg.ackermann_data_structures import (
 )
 
 # 导入可视化模块
-from visualization.ackermann import visualize_trajectory
+from visualization.ackermann import visualize_ackermann_gcs_enhanced
 
 
 # ==================== 阿克曼GCS配置 ====================
@@ -277,13 +277,13 @@ def visualize_ackermann_trajectory(trajectory: BsplineTrajectory,
         vehicle_params: 车辆参数
         output_path: 输出路径
     """
-    visualize_trajectory(
+    visualize_ackermann_gcs_enhanced(
         trajectory=trajectory,
+        vehicle_params=vehicle_params,
+        workspace_regions=workspace_regions,
         source=source,
         target=target,
-        workspace_regions=workspace_regions,
-        vehicle_params=vehicle_params,
-        output_path=output_path
+        save_path=output_path
     )
 
     print(f"可视化已保存到: {output_path}")
@@ -403,18 +403,18 @@ def run_ackermann_gcs_test(scenario: str,
                 import traceback
                 traceback.print_exc()
                 
-                # 回退到基础可视化
+                # 回退到简化可视化
                 try:
-                    visualize_trajectory(
+                    visualize_ackermann_gcs_enhanced(
                         trajectory=planning_result.trajectory,
                         vehicle_params=vehicle_params,
                         source=source,
                         target=target,
                         save_path=f"./output/ackermann_gcs_{scenario}.png",
                     )
-                    print(f"基础可视化已保存到: ./output/ackermann_gcs_{scenario}.png")
+                    print(f"简化可视化已保存到: ./output/ackermann_gcs_{scenario}.png")
                 except Exception as e2:
-                    print(f"基础可视化也失败: {str(e2)}")
+                    print(f"简化可视化也失败: {str(e2)}")
 
     except Exception as e:
         print(f"\n{'='*60}")

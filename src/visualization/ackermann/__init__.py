@@ -6,6 +6,7 @@ AckermannGCS可视化模块
 - 3D配置空间轨迹视图
 - 速度、航向角、曲率等曲线图
 - 综合可视化布局
+- 控制点提取与显示
 """
 
 from config.visualization import VisualizationConfig
@@ -17,12 +18,15 @@ from .plot_3d_trajectory import Plot3DTrajectory
 from .plot_profiles import PlotProfiles
 from .ackermann_visualizer_enhanced import AckermannGCSVisualizer
 
-# 基础可视化器
+# 基础可视化器（已弃用，保留向后兼容）
 from .ackermann_visualizer import visualize_trajectory
 
 # 便捷接口函数
 from .ackermann_visualizer_enhanced import visualize_ackermann_gcs_enhanced
 from .plot_3d_trajectory import visualize_3d_trajectory
+
+# 控制点提取
+from .control_point_extractor import ControlPointExtractor, extract_control_points
 
 __all__ = [
     # 核心类
@@ -35,6 +39,9 @@ __all__ = [
     'Plot3DTrajectory',
     'PlotProfiles',
     'AckermannGCSVisualizer',
+    # 控制点提取
+    'ControlPointExtractor',
+    'extract_control_points',
     # 便捷接口
     'visualize_trajectory',
     'visualize_ackermann_gcs_enhanced',

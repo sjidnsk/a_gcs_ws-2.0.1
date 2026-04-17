@@ -50,7 +50,7 @@ from ackermann_gcs_pkg.flat_output_mapper import compute_flat_output_mapping
 from visualization import VisualizationOutputManager
 
 # 导入控制点相关模块
-from visualization.ackermann.control_point_extractor import extract_control_points
+from visualization.ackermann import extract_control_points
 from config.visualization import ControlPointConfig
 
 
