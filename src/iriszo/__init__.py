@@ -94,7 +94,6 @@ __all__ = [
 
     # 碰撞检测
     'CollisionCheckerAdapter',
-    'LRUCache',
 
     # 核心算法
     'CustomIrisZoAlgorithm',
@@ -103,10 +102,8 @@ __all__ = [
     'HitAndRunSampler',
 
     # 二分搜索
-    'BisectionSearcher',
 
     # 超平面生成
-    'SeparatingHyperplaneGenerator',
 
     # 种子点提取
     'IrisZoSeedExtractor',
@@ -120,11 +117,8 @@ __all__ = [
     'EnhancedCoverageValidator',
     'EnhancedCoverageResult',
     'RadiusCalculator',
-    'ObstacleDetector',
     'CoverageChecker',
     'DistanceQueryEngine',
-    'DistanceTransformEngine',
-    'KDTreeEngine',
 
     # 区域修剪
     'RegionPruner',

@@ -15,7 +15,7 @@ IrisNp 是 Drake 中实际存在的算法，专门用于机器人配置空间。
 配置说明：
 - 使用 IrisNpConfigOptimized 进行配置（推荐）
 - 提供预定义配置模板：高安全、快速处理、平衡配置
-- 详细参数说明见 iris_np_config_documentation.py
+- 详细参数说明见 IrisNpConfigOptimized 类的 docstring
 
 重构说明：
 - 已将功能模块提取到独立文件中：

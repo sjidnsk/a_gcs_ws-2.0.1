@@ -13,7 +13,7 @@ from config.planner import (
     PlannerConfig,
     PlannerResult
 )
-from .trajectory_visualizer import TrajectoryVisualizer
+from visualization.trajectory.trajectory_visualizer import TrajectoryVisualizer
 from .gcs_optimizer import GCSOptimizer
 
 __all__ = [

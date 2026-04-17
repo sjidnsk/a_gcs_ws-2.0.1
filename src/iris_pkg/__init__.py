@@ -58,22 +58,13 @@ __all__ = [
     'get_high_safety_config',
     'get_fast_processing_config',
     'get_balanced_config',
-    'DEFAULT_ITERATION_LIMIT',
-    'DEFAULT_TERMINATION_THRESHOLD',
-    'DEFAULT_REGION_SIZE',
-    'DEFAULT_MAX_REGION_SIZE',
-    'DEFAULT_NUM_DIRECTIONS',
-    'DEFAULT_CACHE_SIZE',
-    'DEFAULT_NUM_WORKERS',
 
     # 数据结构
     'IrisNpRegion',
     'IrisNpResult',
-    'RegionIndex',
 
     # 碰撞检测
     'SimpleCollisionCheckerForIrisNp',
-    'LRUCache',
 
     # 主要功能
     'IrisNpRegionGenerator',

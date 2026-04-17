@@ -3,7 +3,6 @@
 本模块提供数据格式化和转换的统一接口，消除分散在多个模块中的重复逻辑。
 
 主要功能:
-- 角度转换（弧度 <-> 度数）
 - 路径长度计算
 - 数据格式化
 
@@ -13,62 +12,6 @@
 
 import numpy as np
 from typing import Union
-
-
-def radians_to_degrees(
-    radians: Union[float, np.ndarray]
-) -> Union[float, np.ndarray]:
-    """
-    弧度转度数
-    
-    统一管理角度转换，避免在多个模块中重复使用 np.degrees。
-    
-    Args:
-        radians: 弧度值（标量或数组）
-    
-    Returns:
-        度数值（标量或数组）
-    
-    Examples:
-        >>> # 标量转换
-        >>> degrees = radians_to_degrees(np.pi)
-        >>> print(degrees)  # 180.0
-        >>> 
-        >>> # 数组转换
-        >>> radians = np.array([0, np.pi/2, np.pi, 3*np.pi/2])
-        >>> degrees = radians_to_degrees(radians)
-        >>> print(degrees)  # [0, 90, 180, 270]
-    
-    Note:
-        替代以下重复代码位置:
-        - visualization/ackermann/plot_profiles.py: 行77, 145, 148, 225, 237
-    """
-    return np.degrees(radians)
-
-
-def degrees_to_radians(
-    degrees: Union[float, np.ndarray]
-) -> Union[float, np.ndarray]:
-    """
-    度数转弧度
-    
-    Args:
-        degrees: 度数值（标量或数组）
-    
-    Returns:
-        弧度值（标量或数组）
-    
-    Examples:
-        >>> # 标量转换
-        >>> radians = degrees_to_radians(180.0)
-        >>> print(radians)  # 3.14159...
-        >>> 
-        >>> # 数组转换
-        >>> degrees = np.array([0, 90, 180, 270])
-        >>> radians = degrees_to_radians(degrees)
-        >>> print(radians)  # [0, π/2, π, 3π/2]
-    """
-    return np.radians(degrees)
 
 
 def compute_path_length(
@@ -253,8 +196,6 @@ def format_percentage(
 # ============================================================================
 
 __all__ = [
-    'radians_to_degrees',
-    'degrees_to_radians',
     'compute_path_length',
     'compute_cumulative_path_length',
     'normalize_angle_to_pi',

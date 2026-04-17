@@ -11,9 +11,8 @@
 import numpy as np
 from typing import Tuple, Optional, Union
 
-# 默认数值容差
-DEFAULT_EPSILON = 1e-10
-DEFAULT_SMALL_VALUE = 1e-6
+# 默认数值容差 - 从 constants.py 统一导入
+from .constants import DEFAULT_EPSILON, DEFAULT_SMALL_VALUE
 
 
 class NumericalSafetyError(Exception):
@@ -363,92 +362,3 @@ def safe_sqrt(
             return 0.0
     return np.sqrt(value)
 
-
-# ==================== 曲率计算专用安全函数 ====================
-
-def safe_curvature_calculation(
-    x_dot: float,
-    y_dot: float,
-    x_ddot: float,
-    y_ddot: float,
-    epsilon: float = DEFAULT_SMALL_VALUE
-) -> Tuple[float, float]:
-    """
-    安全曲率计算
-    
-    曲率公式: κ = (ẋÿ - ẏẍ) / (ẋ² + ẏ²)^(3/2)
-    
-    Args:
-        x_dot: x方向一阶导数
-        y_dot: y方向一阶导数
-        x_ddot: x方向二阶导数
-        y_ddot: y方向二阶导数
-        epsilon: 小量保护值
-    
-    Returns:
-        (curvature, speed): 曲率和速度
-    
-    Examples:
-        >>> curvature, speed = safe_curvature_calculation(1.0, 0.0, 0.0, 1.0)
-        >>> print(f"curvature={curvature}, speed={speed}")
-    """
-    # 计算速度
-    speed_squared = x_dot**2 + y_dot**2
-    speed = np.sqrt(speed_squared)
-    
-    # 检查速度是否过小
-    if speed < epsilon:
-        return 0.0, speed
-    
-    # 计算曲率分子
-    numerator = x_dot * y_ddot - y_dot * x_ddot
-    
-    # 安全除法: curvature = numerator / speed^3
-    curvature = safe_power_divide(numerator, speed, power=3, epsilon=epsilon)
-    
-    return curvature, speed
-
-
-def safe_curvature_derivative_calculation(
-    first_deriv: np.ndarray,
-    second_deriv: np.ndarray,
-    third_deriv: np.ndarray,
-    epsilon: float = DEFAULT_SMALL_VALUE
-) -> Tuple[float, float, float]:
-    """
-    安全曲率导数计算
-    
-    Args:
-        first_deriv: 一阶导数 [ẋ, ẏ]
-        second_deriv: 二阶导数 [ẍ, ÿ]
-        third_deriv: 三阶导数 [x''', y''']
-        epsilon: 小量保护值
-    
-    Returns:
-        (curvature, curvature_derivative, speed): 曲率, 曲率导数, 速度
-    """
-    x_dot, y_dot = first_deriv
-    x_ddot, y_ddot = second_deriv
-    x_dddot, y_dddot = third_deriv
-    
-    # 计算曲率和速度
-    curvature, speed = safe_curvature_calculation(
-        x_dot, y_dot, x_ddot, y_ddot, epsilon
-    )
-    
-    # 如果速度过小，曲率导数也返回0
-    if speed < epsilon:
-        return 0.0, 0.0, speed
-    
-    # 计算曲率导数（简化公式）
-    # dκ/ds = (dκ/dt) / ||r'(s)||
-    # 这里使用数值稳定的计算方法
-    
-    # 分子项
-    numerator1 = x_ddot * y_ddot - y_ddot * x_ddot  # = 0
-    numerator2 = x_dot * y_dddot - y_dot * x_dddot
-    
-    # 使用安全除法
-    curvature_derivative = safe_power_divide(numerator2, speed, power=3, epsilon=epsilon)
-    
-    return curvature, curvature_derivative, speed

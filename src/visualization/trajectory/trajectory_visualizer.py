@@ -368,5 +368,334 @@ class TrajectoryVisualizer:
         ax.grid(True, alpha=0.3)
         ax.set_ylim([-np.pi, np.pi])
     
+    # ==================== 阿克曼模式绘图方法 ====================
+
+    def _visualize_ackermann_gcs(self, result, original_path: List[Tuple[float, float, float]]):
+        """阿克曼GCS模式可视化 - 生成2张图片：独立3D轨迹图 + 9个子图组合"""
+        # 第一张图：独立的3D (x, y, theta)可视化
+        self._visualize_3d_trajectory_standalone(result, original_path)
+
+        # 第二张图：其他子图
+        fig = plt.figure(figsize=(20, 16))
+
+        # 创建子图布局 - 3x3
+        ax_2d = fig.add_subplot(331)
+        ax_theta = fig.add_subplot(332)
+        ax_delta = fig.add_subplot(333)
+        ax_v = fig.add_subplot(334)
+        ax_omega = fig.add_subplot(335)
+        ax_a = fig.add_subplot(336)
+        ax_v_mag = fig.add_subplot(337)
+        ax_delta_constraint = fig.add_subplot(338)
+        ax_v_constraint = fig.add_subplot(339)
+
+        extent = [
+            self.c_space.origin[0],
+            self.c_space.origin[0] + self.c_space.width * self.c_space.resolution,
+            self.c_space.origin[1],
+            self.c_space.origin[1] + self.c_space.height * self.c_space.resolution
+        ]
+        self._plot_2d_topview_ackermann(ax_2d, result, original_path, extent)
+        self._plot_theta_profile_ackermann(ax_theta, result, original_path)
+        self._plot_steering_angle_profile(ax_delta, result)
+        self._plot_velocity_components(ax_v, result)
+        self._plot_steering_angular_velocity(ax_omega, result)
+        self._plot_longitudinal_acceleration(ax_a, result)
+        self._plot_speed_magnitude(ax_v_mag, result)
+        self._plot_steering_constraints(ax_delta_constraint, result)
+        self._plot_velocity_constraints(ax_v_constraint, result)
+
+        plt.tight_layout()
+
+        if self.config.save_visualization:
+            iris_mode = result.iris_mode_used if result.used_iris else 'traditional'
+            output_file = self.output_manager.generate_output_path(
+                filename=f'corridor_decomposition_{iris_mode}_ackermann.png',
+                dimension='2d'
+            )
+            plt.savefig(output_file, dpi=150, bbox_inches='tight')
+            print(f"阿克曼GCS可视化保存至: {output_file}")
+
+        plt.show()
+        plt.close()
+
+    def _plot_2d_topview_ackermann(self, ax, result, original_path: List[Tuple[float, float, float]], extent):
+        """绘制阿克曼模式的2D俯视图"""
+        ax.imshow(result.corridor_result.adjusted_c_space_2d,
+                 cmap='gray', origin='lower', extent=extent, alpha=0.3)
+
+        if original_path:
+            path_x = [p[0] for p in original_path]
+            path_y = [p[1] for p in original_path]
+            ax.plot(path_x, path_y, 'g-', linewidth=2, label='A* Path')
+
+        if result.gcs_waypoints is not None:
+            ax.plot(result.gcs_waypoints[0], result.gcs_waypoints[1],
+                   'r-', linewidth=2, label='GCS Trajectory')
+
+        if original_path:
+            ax.scatter([original_path[0][0]], [original_path[0][1]],
+                      c='#27ae60', s=100, marker='s', label='Start', zorder=10)
+            ax.scatter([original_path[-1][0]], [original_path[-1][1]],
+                      c='#e74c3c', s=100, marker='*', label='Goal', zorder=10)
+
+        ax.set_title('2D Top View (Ackermann Mode)', fontsize=16, fontweight='bold')
+        ax.set_xlabel('X (m)')
+        ax.set_ylabel('Y (m)')
+        ax.legend(loc='upper left', fontsize=12, framealpha=0.9)
+        ax.set_aspect('equal')
+        ax.grid(True, alpha=0.3)
+
+    def _plot_theta_profile_ackermann(self, ax, result, original_path: List[Tuple[float, float, float]]):
+        """绘制阿克曼模式的θ随路径变化图"""
+        def compute_path_length(path):
+            lengths = [0.0]
+            for i in range(1, len(path)):
+                dx = path[i][0] - path[i-1][0]
+                dy = path[i][1] - path[i-1][1]
+                lengths.append(lengths[-1] + np.sqrt(dx**2 + dy**2))
+            return np.array(lengths)
+
+        if original_path:
+            path_lengths = compute_path_length(original_path)
+            path_thetas = [p[2] for p in original_path]
+            ax.plot(path_lengths, path_thetas, 'g-',
+                   linewidth=2, label='A* Path (θ profile)', marker='o', markersize=4)
+
+        if result.gcs_waypoints is not None:
+            waypoints = result.gcs_waypoints
+            if waypoints.shape[0] >= 3:
+                gcs_lengths = [0.0]
+                for i in range(1, waypoints.shape[1]):
+                    dx = waypoints[0, i] - waypoints[0, i-1]
+                    dy = waypoints[1, i] - waypoints[1, i-1]
+                    gcs_lengths.append(gcs_lengths[-1] + np.sqrt(dx**2 + dy**2))
+
+                ax.plot(gcs_lengths, waypoints[2, :], 'r-',
+                       linewidth=2, label='GCS Trajectory (θ profile)')
+
+        ax.set_title('θ Profile Along Path (Ackermann Mode)', fontsize=16, fontweight='bold')
+        ax.set_xlabel('Path Length (m)')
+        ax.set_ylabel('θ (rad)')
+        ax.legend(loc='upper right', fontsize=12, framealpha=0.9)
+        ax.grid(True, alpha=0.3)
+        ax.set_ylim([-np.pi, np.pi])
+
+    def _plot_steering_angle_profile(self, ax, result):
+        """绘制转向角δ随路径变化图"""
+        if result.gcs_waypoints is not None:
+            waypoints = result.gcs_waypoints
+            delta = waypoints[4, :]
+
+            gcs_lengths = [0.0]
+            for i in range(1, waypoints.shape[1]):
+                dx = waypoints[0, i] - waypoints[0, i-1]
+                dy = waypoints[1, i] - waypoints[1, i-1]
+                gcs_lengths.append(gcs_lengths[-1] + np.sqrt(dx**2 + dy**2))
+
+            delta_min = self.config.ackermann_delta_min
+            delta_max = self.config.ackermann_delta_max
+
+            ax.plot(gcs_lengths, delta, 'b-', linewidth=2, label='Steering Angle δ')
+            ax.axhline(y=delta_min, color='k', linestyle='--', linewidth=1.5,
+                      label=f'δ_min = {delta_min:.2f} rad')
+            ax.axhline(y=delta_max, color='k', linestyle='--', linewidth=1.5,
+                      label=f'δ_max = {delta_max:.2f} rad')
+
+            ax.set_title('Steering Angle δ Profile', fontsize=16, fontweight='bold')
+            ax.set_xlabel('Path Length (m)')
+            ax.set_ylabel('δ (rad)')
+            ax.legend(loc='upper right', fontsize=12, framealpha=0.9)
+            ax.grid(True, alpha=0.3)
+            ax.set_ylim([delta_min - 0.1, delta_max + 0.1])
+
+    def _plot_velocity_components(self, ax, result):
+        """绘制纵向速度v随时间变化图"""
+        if result.gcs_waypoints is not None:
+            waypoints = result.gcs_waypoints
+            v = waypoints[3, :]
+
+            if hasattr(result, 'gcs_sample_times') and result.gcs_sample_times is not None:
+                time_steps = result.gcs_sample_times
+            else:
+                time_steps = np.arange(len(v))
+
+            v_min = self.config.ackermann_v_min
+            v_max = self.config.ackermann_v_max
+
+            ax.plot(time_steps, v, 'b-', linewidth=2, label='Longitudinal Velocity v')
+            ax.axhline(y=v_min, color='k', linestyle='--', linewidth=1.5,
+                      label=f'v_min = {v_min:.1f} m/s')
+            ax.axhline(y=v_max, color='k', linestyle='--', linewidth=1.5,
+                      label=f'v_max = {v_max:.1f} m/s')
+
+            ax.set_title('Longitudinal Velocity v vs Time', fontsize=16, fontweight='bold')
+            ax.set_xlabel('Time (s)')
+            ax.set_ylabel('v (m/s)')
+            ax.legend(loc='upper right', fontsize=12, framealpha=0.9)
+            ax.grid(True, alpha=0.3)
+            ax.set_ylim([v_min - 0.5, v_max + 0.5])
+
+    def _plot_steering_angular_velocity(self, ax, result):
+        """绘制转向角速度ω随时间变化图"""
+        if result.gcs_trajectory is not None:
+            trajectory = result.gcs_trajectory
+
+            if hasattr(result, 'gcs_sample_times') and result.gcs_sample_times is not None:
+                sample_times = result.gcs_sample_times
+            else:
+                sample_times = np.linspace(trajectory.start_time(), trajectory.end_time(), 1000)
+
+            omega_values = []
+            for t in sample_times:
+                control = trajectory.get_control(t)
+                omega = control[1]
+                omega_values.append(float(omega))
+
+            ax.plot(sample_times, omega_values, 'g-', linewidth=2, label='Steering Angular Velocity ω')
+
+            ax.set_title('Steering Angular Velocity ω vs Time', fontsize=16, fontweight='bold')
+            ax.set_xlabel('Time (s)')
+            ax.set_ylabel('ω (rad/s)')
+            ax.legend(loc='upper right', fontsize=12, framealpha=0.9)
+            ax.grid(True, alpha=0.3)
+
+    def _plot_longitudinal_acceleration(self, ax, result):
+        """绘制纵向加速度a随时间变化图"""
+        if result.gcs_trajectory is not None:
+            trajectory = result.gcs_trajectory
+
+            if hasattr(result, 'gcs_sample_times') and result.gcs_sample_times is not None:
+                sample_times = result.gcs_sample_times
+            else:
+                sample_times = np.linspace(trajectory.start_time(), trajectory.end_time(), 1000)
+
+            acceleration_values = []
+            for t in sample_times:
+                control = trajectory.get_control(t)
+                a = control[0]
+                acceleration_values.append(float(a))
+
+            ax.plot(sample_times, acceleration_values, 'r-', linewidth=2, label='Longitudinal Acceleration a')
+
+            ax.set_title('Longitudinal Acceleration a vs Time', fontsize=16, fontweight='bold')
+            ax.set_xlabel('Time (s)')
+            ax.set_ylabel('a (m/s²)')
+            ax.legend(loc='upper right', fontsize=12, framealpha=0.9)
+            ax.grid(True, alpha=0.3)
+
+    def _plot_speed_magnitude(self, ax, result):
+        """绘制速度大小|v|随时间变化图"""
+        if result.gcs_waypoints is not None:
+            waypoints = result.gcs_waypoints
+            v = waypoints[3, :]
+            v_mag = np.abs(v)
+
+            if hasattr(result, 'gcs_sample_times') and result.gcs_sample_times is not None:
+                time_steps = result.gcs_sample_times
+            else:
+                time_steps = np.arange(len(v_mag))
+
+            ax.plot(time_steps, v_mag, 'm-', linewidth=2, label='Speed Magnitude |v|')
+
+            max_speed = np.max(v_mag)
+            min_speed = np.min(v_mag)
+            mean_speed = np.mean(v_mag)
+
+            ax.text(0.02, 0.98,
+                   f'Max Speed: {max_speed:.3f} m/s\nMin Speed: {min_speed:.3f} m/s\nMean Speed: {mean_speed:.3f} m/s',
+                   transform=ax.transAxes, fontsize=10, verticalalignment='top',
+                   bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+            ax.set_title('Speed Magnitude |v| vs Time', fontsize=16, fontweight='bold')
+            ax.set_xlabel('Time (s)')
+            ax.set_ylabel('|v| (m/s)')
+            ax.legend(loc='upper right', fontsize=12, framealpha=0.9)
+            ax.grid(True, alpha=0.3)
+
+    def _plot_steering_constraints(self, ax, result):
+        """绘制转向角约束验证图"""
+        if result.gcs_waypoints is not None:
+            waypoints = result.gcs_waypoints
+            delta = waypoints[4, :]
+
+            gcs_lengths = [0.0]
+            for i in range(1, waypoints.shape[1]):
+                dx = waypoints[0, i] - waypoints[0, i-1]
+                dy = waypoints[1, i] - waypoints[1, i-1]
+                gcs_lengths.append(gcs_lengths[-1] + np.sqrt(dx**2 + dy**2))
+
+            delta_min = self.config.ackermann_delta_min
+            delta_max = self.config.ackermann_delta_max
+
+            ax.plot(gcs_lengths, delta, 'b-', linewidth=2, label='Steering Angle δ')
+            ax.axhline(y=delta_min, color='r', linestyle='--', linewidth=2,
+                      label=f'δ_min = {delta_min:.2f} rad')
+            ax.axhline(y=delta_max, color='r', linestyle='--', linewidth=2,
+                      label=f'δ_max = {delta_max:.2f} rad')
+
+            ax.fill_between(gcs_lengths, delta_min, delta,
+                           where=(delta < delta_min), color='red', alpha=0.3, label='Violation')
+            ax.fill_between(gcs_lengths, delta, delta_max,
+                           where=(delta > delta_max), color='red', alpha=0.3)
+
+            max_violation_lower = np.max(delta_min - delta[delta < delta_min]) if np.any(delta < delta_min) else 0.0
+            max_violation_upper = np.max(delta[delta > delta_max] - delta_max) if np.any(delta > delta_max) else 0.0
+            max_violation = max(max_violation_lower, max_violation_upper)
+            mean_delta = np.mean(delta)
+
+            ax.text(0.02, 0.98,
+                   f'Max Violation: {max_violation:.6f} rad\nMean δ: {mean_delta:.6f} rad',
+                   transform=ax.transAxes, fontsize=10, verticalalignment='top',
+                   bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+            ax.set_title('Steering Angle Constraint Validation', fontsize=16, fontweight='bold')
+            ax.set_xlabel('Path Length (m)')
+            ax.set_ylabel('δ (rad)')
+            ax.legend(loc='upper right', fontsize=12, framealpha=0.9)
+            ax.grid(True, alpha=0.3)
+            ax.set_ylim([delta_min - 0.1, delta_max + 0.1])
+
+    def _plot_velocity_constraints(self, ax, result):
+        """绘制速度约束验证图"""
+        if result.gcs_waypoints is not None:
+            waypoints = result.gcs_waypoints
+            v = waypoints[3, :]
+
+            if hasattr(result, 'gcs_sample_times') and result.gcs_sample_times is not None:
+                time_steps = result.gcs_sample_times
+            else:
+                time_steps = np.arange(len(v))
+
+            v_min = self.config.ackermann_v_min
+            v_max = self.config.ackermann_v_max
+
+            ax.plot(time_steps, v, 'b-', linewidth=2, label='Longitudinal Velocity v')
+            ax.axhline(y=v_min, color='r', linestyle='--', linewidth=2,
+                      label=f'v_min = {v_min:.1f} m/s')
+            ax.axhline(y=v_max, color='r', linestyle='--', linewidth=2,
+                      label=f'v_max = {v_max:.1f} m/s')
+
+            ax.fill_between(time_steps, v_min, v,
+                           where=(v < v_min), color='red', alpha=0.3, label='Violation')
+            ax.fill_between(time_steps, v, v_max,
+                           where=(v > v_max), color='red', alpha=0.3)
+
+            max_violation_lower = np.max(v_min - v[v < v_min]) if np.any(v < v_min) else 0.0
+            max_violation_upper = np.max(v[v > v_max] - v_max) if np.any(v > v_max) else 0.0
+            max_violation = max(max_violation_lower, max_violation_upper)
+            mean_v = np.mean(v)
+
+            ax.text(0.02, 0.98,
+                   f'Max Violation: {max_violation:.6f} m/s\nMean v: {mean_v:.6f} m/s',
+                   transform=ax.transAxes, fontsize=10, verticalalignment='top',
+                   bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+            ax.set_title('Velocity Constraint Validation', fontsize=16, fontweight='bold')
+            ax.set_xlabel('Time (s)')
+            ax.set_ylabel('v (m/s)')
+            ax.legend(loc='upper right', fontsize=12, framealpha=0.9)
+            ax.grid(True, alpha=0.3)
+            ax.set_ylim([v_min - 0.5, v_max + 0.5])
+
     # ==================== 4D可视化方法 ====================
-    

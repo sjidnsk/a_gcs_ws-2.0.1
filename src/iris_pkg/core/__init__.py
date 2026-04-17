@@ -12,10 +12,8 @@ from .iris_np_region_data import (
     RegionIndex
 )
 
-from .iris_np_collision import (
-    SimpleCollisionCheckerForIrisNp,
-    LRUCache
-)
+from .iris_np_collision import SimpleCollisionCheckerForIrisNp
+from .lru_cache import LRUCache
 
 from .iris_np_region import (
     IrisNpRegionGenerator,

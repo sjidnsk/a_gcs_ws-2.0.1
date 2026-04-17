@@ -17,15 +17,6 @@ NUMERICAL_TOLERANCE: float = 1e-10
 # 小量阈值，用于判断速度、距离等是否为零
 SMALL_VALUE_THRESHOLD: float = 1e-6
 
-# 零速度判断阈值，用于判断车辆是否静止
-ZERO_SPEED_THRESHOLD: float = 1e-6
-
-# 小量容差，用于判断向量是否为零
-SMALL_EPSILON: float = 1e-6
-
-# 角度容差，用于判断特殊角度（如0°、90°等）
-ANGLE_TOLERANCE: float = 1e-6
-
 # ============================================================================
 # 采样参数常量
 # ============================================================================
@@ -109,9 +100,6 @@ __all__ = [
     # 数值容差常量
     'NUMERICAL_TOLERANCE',
     'SMALL_VALUE_THRESHOLD',
-    'ZERO_SPEED_THRESHOLD',
-    'SMALL_EPSILON',
-    'ANGLE_TOLERANCE',
     
     # 采样参数常量
     'DEFAULT_NUM_SAMPLES',
