@@ -142,8 +142,7 @@ class GCSOptimizer:
             from ackermann_gcs_pkg.ackermann_data_structures import (
                 VehicleParams,
                 EndpointState,
-                BezierConfig,
-                SCPConfig
+                BezierConfig
             )
             from ackermann_gcs_pkg.flat_output_mapper import compute_flat_output_mapping
 
@@ -175,19 +174,10 @@ class GCSOptimizer:
                 continuity=self.gcs_continuity
             )
 
-            # 创建SCP配置
-            max_iterations = getattr(self.config, 'ackermann_steering_max_iterations', 10)
-            convergence_tolerance = getattr(self.config, 'ackermann_steering_convergence_tolerance', 1e-3)
-            scp_config = SCPConfig(
-                max_iterations=max_iterations,
-                convergence_tolerance=convergence_tolerance
-            )
-
             # 创建规划器
             planner = AckermannGCSPlanner(
                 vehicle_params=vehicle_params,
-                bezier_config=bezier_config,
-                scp_config=scp_config
+                bezier_config=bezier_config
             )
 
             # 创建起点和终点状态

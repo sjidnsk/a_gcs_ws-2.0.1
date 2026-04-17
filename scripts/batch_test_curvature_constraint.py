@@ -33,7 +33,7 @@ from path_planner.scripts.hybrid_astar_gcs_planner import HybridAStarGCSPlanner
 from path_planner.scripts.planner_support import PlannerConfig
 from ackermann_gcs_pkg.ackermann_gcs_planner import AckermannGCSPlanner
 from ackermann_gcs_pkg.ackermann_data_structures import (
-    BezierConfig, SCPConfig, TrajectoryConstraints
+    BezierConfig, TrajectoryConstraints
 )
 
 
@@ -104,8 +104,7 @@ def run_single_test(run_id: int, scenario: str = 'basic'):
 
         ackermann_planner = AckermannGCSPlanner(
             vehicle_params=vehicle_params,
-            bezier_config=BezierConfig(order=5, continuity=1),
-            scp_config=SCPConfig(max_iterations=10, convergence_tolerance=1e-3)
+            bezier_config=BezierConfig(order=5, continuity=1)
         )
 
         t_start = time.time()

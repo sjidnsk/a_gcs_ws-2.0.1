@@ -42,7 +42,7 @@ from path_planner.scripts.planner_support import PlannerConfig
 # from tests.unit.test_hybrid_astar_gcs_planner import plan_path
 from ackermann_gcs_pkg.ackermann_gcs_planner import AckermannGCSPlanner
 from ackermann_gcs_pkg.ackermann_data_structures import (
-    BezierConfig, SCPConfig, TrajectoryConstraints
+    BezierConfig, TrajectoryConstraints
 )
 from ackermann_gcs_pkg.flat_output_mapper import compute_flat_output_mapping
 
@@ -146,8 +146,7 @@ def visualize_3d_trajectory_interactive(
     
     ackermann_planner = AckermannGCSPlanner(
         vehicle_params=vehicle_params,
-        bezier_config=BezierConfig(order=5, continuity=1),
-        scp_config=SCPConfig(max_iterations=10, convergence_tolerance=1e-3)
+        bezier_config=BezierConfig(order=5, continuity=1)
     )
     
     planning_result = ackermann_planner.plan_trajectory(

@@ -54,7 +54,6 @@ from ackermann_gcs_pkg.ackermann_data_structures import (
     VehicleParams,
     EndpointState,
     BezierConfig,
-    SCPConfig,
     PlanningResult
 )
 
@@ -348,8 +347,7 @@ def run_ackermann_gcs_test(scenario: str,
         # 步骤7：初始化AckermannGCSPlanner
         ackermann_planner = AckermannGCSPlanner(
             vehicle_params=vehicle_params,
-            bezier_config=BezierConfig(order=5, continuity=1),
-            scp_config=SCPConfig(max_iterations=10, convergence_tolerance=1e-3)
+            bezier_config=BezierConfig(order=5, continuity=1)
         )
 
         # 步骤8：执行轨迹规划
