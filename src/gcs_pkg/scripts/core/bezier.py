@@ -412,7 +412,7 @@ class BezierGCS(BaseGCS):
                         continue
                     edge.AddCost(Binding[Cost](reg_cost, edge.xu()))
 
-    def addTimeDerivativeRegularization(self, weight: float):
+    def addTimeDerivativeRegularization(self, weight: float, h_ref: float = None):
         """
         添加时间导数正则化：惩罚过小的时间缩放导数h'(s)
 
@@ -441,6 +441,9 @@ class BezierGCS(BaseGCS):
                 weight越大，h'(s)越远离零值，轨迹时间越长但数值更稳定。
                 推荐范围：[0.1, 10.0]
                 weight=0时等效于禁用正则化。
+            h_ref (float, optional): h'(s)的参考目标值。如果为None，则使用hdot_min。
+                增大h_ref可使h'(s)远离零值，从根本上避免加速度发散。
+                推荐范围：[0.2, 0.5]，需大于hdot_min。
 
         Raises:
             AssertionError: 如果weight为负数
@@ -449,7 +452,7 @@ class BezierGCS(BaseGCS):
             - 此方法与addDerivativeRegularization的区别：
               addDerivativeRegularization正则化二阶及以上导数（order>=2），
               此方法正则化一阶导数，专门用于防止h'(s)过小。
-            - 参考值h_ref自动从hdot_min推导，无需用户指定。
+            - 参考值h_ref默认从hdot_min推导，也可通过参数指定更大的值。
         """
         assert weight >= 0, f"weight must be non-negative, got {weight}"
         if weight == 0:
@@ -458,8 +461,9 @@ class BezierGCS(BaseGCS):
         # 获取时间轨迹的一阶导数控制点
         u_time_deriv_control = self.u_h_trajectory.MakeDerivative(1).control_points()
 
-        # 参考值：使用 hdot_min 作为 h'(s) 的目标值
-        h_ref = self.hdot_min
+        # 参考值：使用 h_ref 参数或默认 hdot_min
+        if h_ref is None:
+            h_ref = self.hdot_min
 
         # 对每个一阶导数控制点添加正则化成本
         for c in u_time_deriv_control:
@@ -610,7 +614,151 @@ class BezierGCS(BaseGCS):
                     continue
                 edge.AddConstraint(Binding[Constraint](velocity_con, edge.xu()))
 
-    def addCurvatureHardConstraint(self, max_curvature, min_velocity, h_bar_prime=None):
+    @staticmethod
+    def compute_h_bar_prime_from_trajectory(trajectory, num_samples=200):
+        """从已求解轨迹精确计算 h̄' = (1/Δs)·∫h'(s)ds。
+
+        使用梯形法则对 h'(s) = dh/ds 在 s ∈ [s_start, s_end] 上
+        进行数值积分，返回均值。
+
+        Args:
+            trajectory: 已求解的 BezierTrajectory 对象，
+                须包含有效的 time_traj。
+            num_samples: 数值积分采样点数，必须 >= 10。默认 200。
+
+        Returns:
+            float: h̄' 值（正数）。
+
+        Raises:
+            ValueError: trajectory 无效（time_traj 为 None）
+                或 num_samples < 10。
+
+        Note:
+            - h̄' ≈ L_path / T_total（路径长度 / 总物理时间）
+            - 用于曲率硬约束阈值 C = κ_max · (v_min · h̄')²
+        """
+        if num_samples < 10:
+            raise ValueError(
+                f"num_samples must be >= 10, got {num_samples}"
+            )
+        if trajectory is None or not hasattr(trajectory, "time_traj"):
+            raise ValueError(
+                "trajectory must be a valid BezierTrajectory with "
+                "time_traj attribute"
+            )
+        if trajectory.time_traj is None:
+            raise ValueError(
+                "trajectory.time_traj is None; cannot compute h_bar_prime"
+            )
+
+        s_start = trajectory.start_s
+        s_end = trajectory.end_s
+        if s_end <= s_start:
+            raise ValueError(
+                f"Invalid parameter range: s_end={s_end} <= "
+                f"s_start={s_start}"
+            )
+
+        # 生成采样点
+        s_points = np.linspace(s_start, s_end, num_samples + 1)
+
+        # 获取 time_traj 的一阶导数 h'(s) = dh/ds
+        h_deriv = trajectory.time_traj.MakeDerivative(1)
+
+        # 批量计算 h'(s_i)
+        h_prime_values = np.array(
+            [h_deriv.value(s)[0, 0] for s in s_points]
+        )
+
+        # 梯形法则数值积分
+        integral = np.trapezoid(h_prime_values, s_points)
+
+        # 计算均值
+        h_bar_prime = integral / (s_end - s_start)
+
+        # 有限性检查
+        if not np.isfinite(h_bar_prime) or h_bar_prime <= 0:
+            raise ValueError(
+                f"Computed h_bar_prime is not a finite positive number: "
+                f"{h_bar_prime}. Check trajectory validity."
+            )
+
+        return float(h_bar_prime)
+
+    @staticmethod
+    def estimate_h_bar_prime(
+        path_length_estimate,
+        num_segments,
+        w_time=1.0,
+        w_energy=0.1,
+        v_optimal=None,
+        hdot_min=0.01,
+    ):
+        """静态估算 h̄' ≈ L_path / (N_segments · v_optimal)。
+
+        在求解前基于路径几何和成本权重估算 h̄'，精度中等。
+
+        Args:
+            path_length_estimate: 路径长度估计值，必须 > 0。
+            num_segments: 轨迹段数，必须 >= 1。
+            w_time: 时间成本权重，必须 >= 0。默认 1.0。
+            w_energy: 能量成本权重，必须 > 0。默认 0.1。
+            v_optimal: 最优速度，若指定则忽略 w_time/w_energy。
+            hdot_min: h̄' 下界，低于此值截断并警告。默认 0.01。
+
+        Returns:
+            float: h̄' 估算值（正数，>= hdot_min）。
+
+        Raises:
+            ValueError: 参数不合法。
+
+        Note:
+            - v_optimal = sqrt(w_time / w_energy)
+            - 结果低于 hdot_min 时截断为 hdot_min 并发出 UserWarning
+        """
+        import warnings
+
+        if path_length_estimate <= 0:
+            raise ValueError(
+                f"path_length_estimate must be positive, "
+                f"got {path_length_estimate}"
+            )
+        if num_segments < 1:
+            raise ValueError(
+                f"num_segments must be >= 1, got {num_segments}"
+            )
+        if w_time < 0:
+            raise ValueError(
+                f"w_time must be non-negative, got {w_time}"
+            )
+        if w_energy <= 0:
+            raise ValueError(
+                f"w_energy must be positive, got {w_energy}"
+            )
+
+        # 计算最优速度
+        if v_optimal is None:
+            v_optimal = np.sqrt(w_time / w_energy)
+
+        # 静态估算
+        h_bar_prime = path_length_estimate / (num_segments * v_optimal)
+
+        # 下界保护
+        if h_bar_prime < hdot_min:
+            warnings.warn(
+                f"Estimated h_bar_prime={h_bar_prime:.6f} is below "
+                f"hdot_min={hdot_min}. Clamping to hdot_min.",
+                UserWarning,
+                stacklevel=2,
+            )
+            h_bar_prime = hdot_min
+
+        return float(h_bar_prime)
+
+    def addCurvatureHardConstraint(
+        self, max_curvature, min_velocity, h_bar_prime=None,
+        h_bar_prime_safety_factor=1.0,
+    ):
         """
         添加曲率硬约束：||Q_j||_2 <= C = kappa_max * rho_min^2
 
@@ -633,11 +781,14 @@ class BezierGCS(BaseGCS):
         Args:
             max_curvature: 最大允许曲率 kappa_max (1/m)，必须为正数
             min_velocity: 最小速度 v_min (m/s)，用于计算 rho_min
-            h_bar_prime: h'(s)的均值估计，如果为None则自动估算
+            h_bar_prime: h'(s)的均值估计。None时使用默认值1.0。
+            h_bar_prime_safety_factor: 保守修正因子，范围(0, 1.0]。
+                默认1.0（不修正）。推荐0.7。
 
         Raises:
             ValueError: 如果 max_curvature <= 0 或 min_velocity < 0
             ValueError: 如果计算得到的 C 值为0（约束退化，仅允许直线）
+            ValueError: 如果 h_bar_prime_safety_factor 不在 (0, 1.0]
 
         Note:
             - 此约束是凸约束（Lorentz锥），保持优化问题的凸性
@@ -659,12 +810,23 @@ class BezierGCS(BaseGCS):
 
         # 步骤1：计算 h_bar_prime（自动估算或用户指定）
         if h_bar_prime is None:
-            # 保守估计：h_bar_prime = hdot_min（时间导数最小值）
-            # 更精确的估计需要求解后获得，这里使用保守下界
-            h_bar_prime = 1.0  # 默认假设 h'(s) 均值约为1.0
+            h_bar_prime = 1.0
+            print(
+                "Warning: h_bar_prime using default value 1.0 "
+                "(fallback estimate, consider using iterative refinement "
+                "or static estimation)"
+            )
 
-        # 步骤2：计算 rho_min 和 C
-        rho_min = min_velocity * h_bar_prime
+        # 步骤1.5：safety_factor 验证和应用
+        if not (0 < h_bar_prime_safety_factor <= 1.0):
+            raise ValueError(
+                f"h_bar_prime_safety_factor must be in (0, 1.0], "
+                f"got {h_bar_prime_safety_factor}"
+            )
+        effective_h_bar_prime = h_bar_prime * h_bar_prime_safety_factor
+
+        # 步骤2：计算 rho_min 和 C（使用 effective_h_bar_prime）
+        rho_min = min_velocity * effective_h_bar_prime
         C = max_curvature * rho_min ** 2
 
         if C <= 0:
@@ -723,8 +885,11 @@ class BezierGCS(BaseGCS):
                     continue
                 edge.AddConstraint(Binding[Constraint](curvature_con, edge.xu()))
 
-    def addCurvatureHardConstraintForEdges(self, max_curvature, min_velocity,
-                                            boundary_edge_ids=None, h_bar_prime=None):
+    def addCurvatureHardConstraintForEdges(
+        self, max_curvature, min_velocity,
+        boundary_edge_ids=None, h_bar_prime=None,
+        h_bar_prime_safety_factor=1.0,
+    ):
         """
         添加曲率硬约束（支持跳过边界段）
 
@@ -735,11 +900,14 @@ class BezierGCS(BaseGCS):
             max_curvature: 最大允许曲率 kappa_max (1/m)
             min_velocity: 最小速度 v_min (m/s)
             boundary_edge_ids: 边界边的id集合，这些边不应用曲率硬约束
-            h_bar_prime: h'(s)的均值估计
+            h_bar_prime: h'(s)的均值估计。None时使用默认值1.0。
+            h_bar_prime_safety_factor: 保守修正因子，范围(0, 1.0]。
+                默认1.0（不修正）。推荐0.7。
 
         Raises:
             ValueError: 如果 max_curvature <= 0 或 min_velocity < 0
             ValueError: 如果计算得到的 C 值为0
+            ValueError: 如果 h_bar_prime_safety_factor 不在 (0, 1.0]
 
         Note:
             - 边界段（起终点v=0附近）由航向角约束隐式保证曲率
@@ -754,9 +922,22 @@ class BezierGCS(BaseGCS):
         # 计算 h_bar_prime
         if h_bar_prime is None:
             h_bar_prime = 1.0
+            print(
+                "Warning: h_bar_prime using default value 1.0 "
+                "(fallback estimate, consider using iterative refinement "
+                "or static estimation)"
+            )
 
-        # 计算 rho_min 和 C
-        rho_min = min_velocity * h_bar_prime
+        # safety_factor 验证和应用
+        if not (0 < h_bar_prime_safety_factor <= 1.0):
+            raise ValueError(
+                f"h_bar_prime_safety_factor must be in (0, 1.0], "
+                f"got {h_bar_prime_safety_factor}"
+            )
+        effective_h_bar_prime = h_bar_prime * h_bar_prime_safety_factor
+
+        # 计算 rho_min 和 C（使用 effective_h_bar_prime）
+        rho_min = min_velocity * effective_h_bar_prime
         C = max_curvature * rho_min ** 2
 
         if C <= 0:
@@ -948,17 +1129,74 @@ class BezierGCS(BaseGCS):
 
         return source_edges, target_edges
 
+    def _build_trajectory_from_path(self, path_edges, result):
+        """从路径边列表和求解结果构建 BezierTrajectory。
+
+        Args:
+            path_edges: 路径上的边列表。
+            result: Drake 的 MathematicalProgramResult 对象。
+
+        Returns:
+            BezierTrajectory 对象，或 None（构建失败时）。
+        """
+        try:
+            knots = np.zeros(self.order + 1)
+            path_control_points = []
+            time_control_points = []
+
+            for edge in path_edges:
+                if edge.v() == self.target:
+                    knots = np.concatenate((knots, [knots[-1]]))
+                    path_control_points.append(result.GetSolution(edge.xv()))
+                    time_control_points.append(
+                        np.array([result.GetSolution(edge.xu())[-1]]))
+                    break
+
+                edge_time = knots[-1] + 1.
+                knots = np.concatenate(
+                    (knots, np.full(self.order, edge_time)))
+
+                edge_path_points = np.reshape(
+                    result.GetSolution(edge.xv())[:-(self.order + 1)],
+                    (self.dimension, self.order + 1), "F")
+                edge_time_points = result.GetSolution(
+                    edge.xv())[-(self.order + 1):]
+
+                for ii in range(self.order):
+                    path_control_points.append(edge_path_points[:, ii])
+                    time_control_points.append(
+                        np.array([edge_time_points[ii]]))
+
+            offset = time_control_points[0].copy()
+            for ii in range(len(time_control_points)):
+                time_control_points[ii] -= offset
+
+            path_control_points = np.array(path_control_points).T
+            time_control_points = np.array(time_control_points).T
+
+            path = BsplineTrajectory(
+                BsplineBasis(self.order + 1, knots), path_control_points)
+            time_traj = BsplineTrajectory(
+                BsplineBasis(self.order + 1, knots), time_control_points)
+
+            return BezierTrajectory(path, time_traj)
+        except Exception:
+            return None
+
     def SolvePath(self, rounding=False, verbose=False, preprocessing=False):
         """
         求解最优路径并返回轨迹
-        
+
         Args:
             rounding (bool): 是否使用舍入策略（先求解松弛问题）
             verbose (bool): 是否显示详细求解信息
             preprocessing (bool): 是否进行预处理
-            
+
         Returns:
             tuple: (BezierTrajectory对象, 结果字典)
+                   结果字典中包含 "all_candidate_trajectories" 列表，
+                   存储所有候选舍入路径对应的轨迹，供上层按约束
+                   违向量筛选。
         """
         # 调用基类方法求解GCS
         best_path, best_result, results_dict = self.solveGCS(
@@ -967,53 +1205,29 @@ class BezierGCS(BaseGCS):
         if best_path is None:
             return None, results_dict
 
-        # 提取轨迹控制点
-        knots = np.zeros(self.order + 1)  # 节点向量
-        path_control_points = []  # 空间控制点列表
-        time_control_points = []  # 时间控制点列表
-        
-        # 遍历最优路径中的每条边
-        for edge in best_path:
-            # 如果到达目标点，处理最后一条边
-            if edge.v() == self.target:
-                knots = np.concatenate((knots, [knots[-1]]))
-                # 获取目标点处的控制点
-                path_control_points.append(best_result.GetSolution(edge.xv()))
-                # 获取目标点处的时间
-                time_control_points.append(np.array([best_result.GetSolution(edge.xu())[-1]]))
-                break
-                
-            # 计算当前边的结束时间
-            edge_time = knots[-1] + 1.
-            # 扩展节点向量
-            knots = np.concatenate((knots, np.full(self.order, edge_time)))
-            
-            # 提取边的控制点
-            # 注意：edge.xv() 包含空间控制点和时间控制点
-            edge_path_points = np.reshape(best_result.GetSolution(edge.xv())[:-(self.order + 1)],
-                                             (self.dimension, self.order + 1), "F")
+        # 构建最优轨迹
+        best_trajectory = self._build_trajectory_from_path(
+            best_path, best_result)
 
-            edge_time_points = best_result.GetSolution(edge.xv())[-(self.order + 1):]
-            
-            # 将除最后一个控制点外的所有控制点添加到轨迹
-            for ii in range(self.order):
-                path_control_points.append(edge_path_points[:, ii])
-                time_control_points.append(np.array([edge_time_points[ii]]))
+        # 构建所有候选轨迹（供上层按约束违反量筛选）
+        all_candidate_trajectories = []
+        all_paths_results = results_dict.get("all_rounded_paths_results", [])
+        for path_edges, path_result in all_paths_results:
+            if not path_result.is_success():
+                continue
+            traj = self._build_trajectory_from_path(path_edges, path_result)
+            if traj is not None:
+                all_candidate_trajectories.append(traj)
 
-        # 时间偏移校正：使起始时间为0
-        offset = time_control_points[0].copy()
-        for ii in range(len(time_control_points)):
-            time_control_points[ii] -= offset
+        # 确保最优轨迹在候选列表中
+        if best_trajectory is not None:
+            if best_trajectory not in all_candidate_trajectories:
+                all_candidate_trajectories.insert(0, best_trajectory)
 
-        # 转换为合适的数组格式
-        path_control_points = np.array(path_control_points).T
-        time_control_points = np.array(time_control_points).T
+        results_dict["all_candidate_trajectories"] = (
+            all_candidate_trajectories)
 
-        # 创建B样条轨迹
-        path = BsplineTrajectory(BsplineBasis(self.order + 1, knots), path_control_points)
-        time_traj = BsplineTrajectory(BsplineBasis(self.order + 1, knots), time_control_points)
-
-        return BezierTrajectory(path, time_traj), results_dict
+        return best_trajectory, results_dict
 
 class BezierTrajectory:
     """

@@ -87,7 +87,7 @@ class AckermannBezierGCS(BezierGCS):
         # 航向角约束配置（默认使用旋转矩阵法）
         self.heading_constraint_config = HeadingConstraintConfig(
             method=HeadingConstraintMethod.ROTATION_MATRIX,
-            num_control_points=4,  # 约束前3个控制点，提高轨迹质量
+            num_control_points=3,  # 约束前2个控制点对
             enable_multi_point=True
         )
 

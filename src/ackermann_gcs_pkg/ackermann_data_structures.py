@@ -138,6 +138,20 @@ class TrajectoryConstraints:
             推导方式: v_optimal = sqrt(w_time / w_energy), min_velocity = v_optimal * 0.5
             默认1.58 m/s 对应 w_time=1.0, w_energy=0.1
         curvature_constraint_mode: 曲率约束模式
+        h_bar_prime: h'(s)均值估计。None表示未估计（将使用默认值1.0
+            或迭代修正）。指定具体值时跳过迭代修正。
+        h_bar_prime_safety_factor: 保守修正因子，范围(0, 1.0]。
+            用于防止h̄'过估导致约束过松。默认0.7。
+        max_h_bar_prime_iterations: h̄'迭代修正最大次数。
+            1表示禁用迭代修正，>1启用。默认3。
+        h_bar_prime_convergence_threshold: 迭代收敛判定阈值。
+            相对变化小于此值判定收敛。默认0.15（15%）。
+        h_bar_prime_relax_factor: 求解失败时h̄'放宽因子。默认1.3。
+        max_h_bar_prime_relax_attempts: 求解失败放宽重试最大次数。默认3。
+        h_bar_prime_safety_factor_decay: 当h̄'在迭代中显著下降时，
+            safety_factor自动乘以此衰减因子以收紧约束。范围(0, 1.0)。
+            默认0.8（即safety_factor从0.7降至0.56）。
+            设为1.0禁用动态收紧。
     """
     max_velocity: float
     max_acceleration: float
@@ -146,6 +160,13 @@ class TrajectoryConstraints:
     enable_curvature_hard_constraint: bool = False
     min_velocity: float = 1.58
     curvature_constraint_mode: str = "none"
+    h_bar_prime: Optional[float] = None
+    h_bar_prime_safety_factor: float = 0.7
+    max_h_bar_prime_iterations: int = 3
+    h_bar_prime_convergence_threshold: float = 0.15
+    h_bar_prime_relax_factor: float = 1.3
+    max_h_bar_prime_relax_attempts: int = 3
+    h_bar_prime_safety_factor_decay: float = 0.8
 
     def __post_init__(self):
         """参数验证"""
@@ -166,6 +187,32 @@ class TrajectoryConstraints:
         # 当启用硬约束时，自动设置模式
         if self.enable_curvature_hard_constraint and self.curvature_constraint_mode == "none":
             self.curvature_constraint_mode = "hard"
+        # h_bar_prime 相关参数验证
+        if self.h_bar_prime is not None and self.h_bar_prime <= 0:
+            raise ValueError(
+                f"h_bar_prime must be positive when specified, "
+                f"got {self.h_bar_prime}"
+            )
+        if not (0 < self.h_bar_prime_safety_factor <= 1.0):
+            raise ValueError(
+                f"h_bar_prime_safety_factor must be in (0, 1.0], "
+                f"got {self.h_bar_prime_safety_factor}"
+            )
+        if self.max_h_bar_prime_iterations < 1:
+            raise ValueError(
+                f"max_h_bar_prime_iterations must be >= 1, "
+                f"got {self.max_h_bar_prime_iterations}"
+            )
+        if not (0 < self.h_bar_prime_convergence_threshold < 1.0):
+            raise ValueError(
+                f"h_bar_prime_convergence_threshold must be in (0, 1.0), "
+                f"got {self.h_bar_prime_convergence_threshold}"
+            )
+        if not (0 < self.h_bar_prime_safety_factor_decay <= 1.0):
+            raise ValueError(
+                f"h_bar_prime_safety_factor_decay must be in (0, 1.0], "
+                f"got {self.h_bar_prime_safety_factor_decay}"
+            )
 
     @classmethod
     def fromdict(cls, data: Dict) -> 'TrajectoryConstraints':

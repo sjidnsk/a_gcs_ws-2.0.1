@@ -284,6 +284,18 @@ class GCSOptimizer:
         if self.has_energy_cost:
             gcs.addPathEnergyCost(weight=self.energy_weight)
         
+        # 设置自定义舍入策略：随机前向+随机后向（探索更多候选路径）
+        from gcs_pkg.scripts.rounding import (
+            randomForwardPathSearch,
+            randomBackwardPathSearch,
+        )
+        gcs.setRoundingStrategy(
+            [randomForwardPathSearch, randomBackwardPathSearch],
+            flow_tol=1e-5,
+            max_paths=10,
+            max_trials=100,
+        )
+        
         trajectory, _ = gcs.SolvePath(rounding=True, verbose=False, preprocessing=True)
         return trajectory
     

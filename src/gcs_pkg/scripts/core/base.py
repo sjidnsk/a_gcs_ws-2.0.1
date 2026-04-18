@@ -591,6 +591,45 @@ class BaseGCS:
             raise ValueError("Unrecognized file type:", file_type)
 
 
+    def _extract_active_path(self, gcs, result, source, target):
+        """从求解结果中提取活跃边组成的路径。
+
+        通过检查每条边的流值 φ，将 φ > 0.5 的边视为活跃边，
+        按拓扑顺序连接成 source→target 的完整路径。
+
+        Args:
+            gcs: GraphOfConvexSets 对象
+            result: 求解结果
+            source: 起始顶点
+            target: 目标顶点
+
+        Returns:
+            list: 活跃边组成的路径，或 None（提取失败时）
+        """
+        active_edges = []
+        for edge in gcs.Edges():
+            phi_val = result.GetSolution(edge.phi())
+            if phi_val > 0.5:
+                active_edges.append(edge)
+
+        # 按拓扑顺序排列活跃边
+        path = []
+        current = source
+        visited = set()
+        while current != target:
+            found_next = False
+            for edge in active_edges:
+                if edge.u() == current and edge not in visited:
+                    path.append(edge)
+                    visited.add(edge)
+                    current = edge.v()
+                    found_next = True
+                    break
+            if not found_next:
+                return None
+        return path
+
+
     def solveGCS(self, rounding, preprocessing, verbose):
         """
         求解 GCS 最短路径问题。
@@ -674,14 +713,20 @@ class BaseGCS:
             # 尝试每一个指定的舍入策略
             for fn in self.rounding_fn:
                 # 调用舍入函数，传入 GCS 对象、松弛解结果、源点、目标点和额外参数
-                rounded_edges = fn(self.gcs, result, self.source, self.target,
-                                   **self.rounding_kwargs)
-                if rounded_edges is None: # 如果某个策略未能找到路径
+                try:
+                    rounded_edges = fn(self.gcs, result, self.source, self.target,
+                                       **self.rounding_kwargs)
+                except Exception as e:
+                    print(f"{fn.__name__} raised exception: {e}")
+                    rounded_edges = None
+
+                if rounded_edges is None or len(rounded_edges) == 0:
                     print(fn.__name__, "could not find a path.")
-                    active_edges.append(rounded_edges) # 仍将 None 添加到列表
-                else: # 如果找到了路径
-                    found_path = True # 标记找到了路径
-                    active_edges.extend([rounded_edges]) # 将找到的路径添加到列表
+                    continue
+                else:
+                    found_path = True
+                    for path in rounded_edges:
+                        active_edges.append(path)
 
             results_dict["rounded_paths"] = active_edges # 记录所有尝试的路径
 
@@ -700,9 +745,9 @@ class BaseGCS:
 
             # 对每个找到的路径进行第二次精确求解
             for path_edges in active_edges:
-                if path_edges is None: # 如果路径为 None，跳过
-                    rounded_results.append(None)
-                    continue
+                # 清除上一条路径的 Phi 约束，确保每次求解在干净状态下执行
+                for edge in self.gcs.Edges():
+                    edge.ClearPhiConstraints()
 
                 # 遍历图中所有边，根据当前路径 (path_edges) 固定其启用/禁用状态 (phi)
                 for edge in self.gcs.Edges():
@@ -734,6 +779,10 @@ class BaseGCS:
             results_dict["max_rounded_solver_time"] =  max_rounded_solver_time
             results_dict["total_rounded_solver_time"] = total_rounded_solver_time
             results_dict["rounded_cost"] = best_result.get_optimal_cost()
+            # 保存所有候选路径及其求解结果，供上层按约束违反量筛选
+            results_dict["all_rounded_paths_results"] = list(
+                zip(active_edges, rounded_results)
+            )
 
             # 如果要求详细输出，打印所有舍入后求解的信息
             if verbose:
@@ -758,8 +807,12 @@ class BaseGCS:
             self.options.max_rounded_paths = 10
             # 执行舍入求解
             rounded_result = self.gcs.SolveShortestPath(self.source, self.target, self.options)
-            # 使用默认的 MIP 路径提取策略获取最佳路径
-            best_path = MipPathExtraction(self.gcs, rounded_result, self.source, self.target)[0]
+            # 优先从精确解中提取活跃边路径
+            best_path = self._extract_active_path(
+                self.gcs, rounded_result, self.source, self.target)
+            if best_path is None:
+                # 回退到 MipPathExtraction
+                best_path = MipPathExtraction(self.gcs, rounded_result, self.source, self.target)[0]
             best_result = rounded_result
             results_dict["rounded_result"] = rounded_result
             results_dict["rounded_solver_time"] = rounded_result.get_solver_details().optimizer_time

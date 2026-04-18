@@ -22,6 +22,10 @@ if TYPE_CHECKING:
     from .ackermann_bezier_gcs import AckermannBezierGCS
     from .ackermann_gcs_planner import AckermannGCSPlanner
     from .trajectory_evaluator import TrajectoryEvaluator
+    from .h_bar_prime_iteration import (
+        HBarPrimeIterationResult,
+        iterate_h_bar_prime,
+    )
     from .flat_output_mapper import FlatOutputMapper, compute_flat_output_mapping
     # 工具模块
     from .constants import *
@@ -68,6 +72,12 @@ def __getattr__(name: str):
         _import_cache[name] = TrajectoryEvaluator
         return TrajectoryEvaluator
     
+    if name in ("HBarPrimeIterationResult", "iterate_h_bar_prime"):
+        from . import h_bar_prime_iteration
+        obj = getattr(h_bar_prime_iteration, name)
+        _import_cache[name] = obj
+        return obj
+    
     if name in ("FlatOutputMapper", "compute_flat_output_mapping"):
         from . import flat_output_mapper
         obj = getattr(flat_output_mapper, name)
@@ -92,6 +102,8 @@ __all__ = [
     "AckermannBezierGCS",
     "AckermannGCSPlanner",
     "TrajectoryEvaluator",
+    "HBarPrimeIterationResult",
+    "iterate_h_bar_prime",
     "FlatOutputMapper",
     # 函数
     "compute_flat_output_mapping",

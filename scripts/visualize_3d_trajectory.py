@@ -159,6 +159,9 @@ def visualize_3d_trajectory_interactive(
             "path_length": 1.5,
             "energy": 3.0,
             "time_derivative_reg": 3.0,
+            "regularization_r": 5.0,
+            "regularization_h": 2.0,
+            "h_ref": 0.08,
         },
         verbose=True  # 启用详细输出，显示约束信息
     )

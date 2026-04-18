@@ -6,6 +6,7 @@
 import os
 import sys
 import time
+import io
 import numpy as np
 
 # 路径设置
@@ -150,7 +151,7 @@ def run_single_test(run_id: int, scenario: str = 'basic'):
 
 
 def main():
-    num_runs = 10
+    num_runs = 20
     scenario = 'basic'
 
     print("=" * 70)
@@ -159,22 +160,33 @@ def main():
 
     results = []
     for i in range(num_runs):
-        print(f"\n--- 运行 {i+1}/{num_runs} ---")
-        t0 = time.time()
-        result = run_single_test(i + 1, scenario)
-        elapsed = time.time() - t0
+        # 进度条
+        pct = (i + 1) / num_runs * 100
+        bar_len = 30
+        filled = int(bar_len * (i + 1) / num_runs)
+        bar = '█' * filled + '░' * (bar_len - filled)
+        sys.stdout.write(
+            f"\r  [{bar}] {i+1}/{num_runs} ({pct:.0f}%)")
+        sys.stdout.flush()
 
+        # 抑制每次规划的 stdout/stderr 输出
+        old_stdout = sys.stdout
+        old_stderr = sys.stderr
+        sys.stdout = io.StringIO()
+        sys.stderr = io.StringIO()
+        try:
+            t0 = time.time()
+            result = run_single_test(i + 1, scenario)
+            elapsed = time.time() - t0
+        finally:
+            sys.stdout = old_stdout
+            sys.stderr = old_stderr
+
+        result['elapsed'] = elapsed
         results.append(result)
 
-        status = "✓" if result['success'] else "✗"
-        feasible = "✓" if result['feasible'] else "✗"
-        print(f"  {status} 成功 | {feasible} 可行 | "
-              f"求解: {result['solve_time']:.2f}s | "
-              f"κ_max: {result['max_curvature']:.4f} | "
-              f"κ_viol: {result['curvature_violation']:.4f} | "
-              f"总耗时: {elapsed:.2f}s")
-        if result['error']:
-            print(f"  错误: {result['error']}")
+    # 进度条换行
+    print()
 
     # 统计分析
     print("\n" + "=" * 70)

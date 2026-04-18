@@ -22,6 +22,7 @@ from .ackermann_data_structures import (
 )
 from .trajectory_evaluator import TrajectoryEvaluator
 from .curvature_statistics import CurvatureStatistics
+from .h_bar_prime_iteration import iterate_h_bar_prime, HBarPrimeIterationResult
 
 
 class AckermannGCSPlanner:
@@ -169,6 +170,7 @@ class AckermannGCSPlanner:
         # bezier_gcs.addVelocityLimits(np.zeros(2), np.full(2, constraints.max_velocity))
 
         # 步骤4.5：添加曲率硬约束
+        h_bar_prime_iteration_result = None
         if constraints.enable_curvature_hard_constraint or \
            constraints.curvature_constraint_mode == "hard":
             if verbose:
@@ -179,10 +181,9 @@ class AckermannGCSPlanner:
                 print(f"约束形式: ||Q_j||_2 <= C = kappa_max * rho_min^2")
                 print(f"最大曲率: {constraints.max_curvature:.4f} 1/m")
                 print(f"最小速度: {constraints.min_velocity:.4f} m/s")
-                rho_min = constraints.min_velocity * 1.0  # h_bar_prime默认1.0
-                C = constraints.max_curvature * rho_min ** 2
-                print(f"rho_min: {rho_min:.4f}")
-                print(f"约束阈值 C: {C:.6f}")
+                print(f"h_bar_prime: {constraints.h_bar_prime}")
+                print(f"safety_factor: {constraints.h_bar_prime_safety_factor}")
+                print(f"max_iterations: {constraints.max_h_bar_prime_iterations}")
                 print(f"凸性保证: 二阶锥约束（Lorentz锥）")
                 print(f"保守性: Cauchy-Schwarz + 凸包 + 速度下界")
                 if constraints.min_velocity > 0:
@@ -190,17 +191,83 @@ class AckermannGCSPlanner:
                     print(f"保守因子 alpha: {alpha:.1f}")
                 print("=" * 70)
 
-            try:
-                bezier_gcs.addCurvatureHardConstraint(
-                    max_curvature=constraints.max_curvature,
-                    min_velocity=constraints.min_velocity,
+            # 判断是否使用迭代修正模式
+            use_iteration = (
+                constraints.h_bar_prime is None
+                and constraints.max_h_bar_prime_iterations > 1
+            )
+
+            if use_iteration:
+                # 迭代修正模式：先求解无曲率约束，再迭代修正 h̄'
+                if verbose:
+                    print("[Planner] Using iterative h̄' refinement mode")
+
+                # 先添加成本函数（迭代修正需要）
+                if cost_weights is None:
+                    cost_weights = {"time": 1.0, "path_length": 0.1, "energy": 0.01}
+
+                if "time" in cost_weights and cost_weights["time"] > 0:
+                    bezier_gcs.addTimeCost(cost_weights["time"])
+                if "path_length" in cost_weights and cost_weights["path_length"] > 0:
+                    bezier_gcs.addPathLengthCost(cost_weights["path_length"])
+                if "energy" in cost_weights and cost_weights["energy"] > 0:
+                    bezier_gcs.addPathEnergyCost(cost_weights["energy"])
+                if "time_derivative_reg" in cost_weights and cost_weights["time_derivative_reg"] > 0:
+                    h_ref = cost_weights.get("h_ref", None)
+                    bezier_gcs.addTimeDerivativeRegularization(
+                        cost_weights["time_derivative_reg"], h_ref=h_ref
+                    )
+                if "regularization_r" in cost_weights and cost_weights["regularization_r"] > 0:
+                    weight_r = cost_weights["regularization_r"]
+                    weight_h = cost_weights.get("regularization_h", 0.0)
+                    reg_order = cost_weights.get("regularization_order", 2)
+                    bezier_gcs.addDerivativeRegularization(weight_r, weight_h, reg_order)
+
+                # 执行迭代修正
+                iter_traj, h_bar_prime_iteration_result = iterate_h_bar_prime(
+                    bezier_gcs=bezier_gcs,
+                    constraints=constraints,
+                    cost_weights=cost_weights,
+                    source=source,
+                    target=target,
+                    workspace_regions=workspace_regions,
+                    verbose=verbose,
                 )
-                if verbose:
-                    print("✓ 曲率硬约束添加完成")
-            except ValueError as e:
-                if verbose:
-                    print(f"⚠️  曲率硬约束添加失败: {e}")
-                    print("   将跳过曲率硬约束，仅使用成本项软引导")
+
+                if iter_traj is not None:
+                    if verbose:
+                        hbp_res = h_bar_prime_iteration_result
+                        rho_min = constraints.min_velocity * hbp_res.effective_h_bar_prime
+                        C = constraints.max_curvature * rho_min ** 2
+                        print(f"✓ 迭代修正完成: h̄'={hbp_res.h_bar_prime:.6f}, "
+                              f"effective={hbp_res.effective_h_bar_prime:.6f}, "
+                              f"C={C:.6f}")
+                else:
+                    if verbose:
+                        print("⚠️  迭代修正求解失败，将跳过曲率硬约束")
+
+            else:
+                # 直接模式：使用指定 h̄' 或默认值 1.0
+                try:
+                    bezier_gcs.addCurvatureHardConstraint(
+                        max_curvature=constraints.max_curvature,
+                        min_velocity=constraints.min_velocity,
+                        h_bar_prime=constraints.h_bar_prime,
+                        h_bar_prime_safety_factor=constraints.h_bar_prime_safety_factor,
+                    )
+                    if verbose:
+                        hbp = constraints.h_bar_prime if constraints.h_bar_prime is not None else 1.0
+                        effective = hbp * constraints.h_bar_prime_safety_factor
+                        rho_min = constraints.min_velocity * effective
+                        C = constraints.max_curvature * rho_min ** 2
+                        print(f"rho_min: {rho_min:.4f}")
+                        print(f"约束阈值 C: {C:.6f}")
+                        print(f"effective h̄': {effective:.6f}")
+                        print("✓ 曲率硬约束添加完成")
+                except ValueError as e:
+                    if verbose:
+                        print(f"⚠️  曲率硬约束添加失败: {e}")
+                        print("   将跳过曲率硬约束，仅使用成本项软引导")
 
         # 步骤5：添加成本函数
         if verbose:
@@ -225,17 +292,44 @@ class AckermannGCSPlanner:
                 print(f"[Planner]   Energy cost weight: {cost_weights['energy']}")
 
         if "time_derivative_reg" in cost_weights and cost_weights["time_derivative_reg"] > 0:
+            h_ref = cost_weights.get("h_ref", None)
             bezier_gcs.addTimeDerivativeRegularization(
-                cost_weights["time_derivative_reg"]
+                cost_weights["time_derivative_reg"], h_ref=h_ref
             )
             if verbose:
+                h_ref_str = f", h_ref={h_ref}" if h_ref is not None else ""
                 print(
                     f"[Planner]   Time derivative regularization weight: "
-                    f"{cost_weights['time_derivative_reg']}"
+                    f"{cost_weights['time_derivative_reg']}{h_ref_str}"
+                )
+
+        # 空间/时间二阶导数正则化：直接惩罚||r''(s)||²和||h''(s)||²
+        if "regularization_r" in cost_weights and cost_weights["regularization_r"] > 0:
+            weight_r = cost_weights["regularization_r"]
+            weight_h = cost_weights.get("regularization_h", 0.0)
+            reg_order = cost_weights.get("regularization_order", 2)
+            bezier_gcs.addDerivativeRegularization(weight_r, weight_h, reg_order)
+            if verbose:
+                print(
+                    f"[Planner]   Derivative regularization: "
+                    f"r={weight_r}, h={weight_h}, order={reg_order}"
                 )
 
         # 步骤6：GCS求解（曲率硬约束，多次舍入尝试）
         # GCS rounding具有随机性，多次求解可提高可行率
+
+        # 设置自定义舍入策略：随机前向+随机后向（探索更多候选路径）
+        from gcs_pkg.scripts.rounding import (
+            randomForwardPathSearch,
+            randomBackwardPathSearch,
+        )
+        bezier_gcs.setRoundingStrategy(
+            [randomForwardPathSearch, randomBackwardPathSearch],
+            flow_tol=1e-5,
+            max_paths=10,
+            max_trials=100,
+        )
+
         max_solve_attempts = self.bezier_config.max_rounding_attempts
         max_rounded_paths = self.bezier_config.max_rounded_paths
         if verbose:
@@ -247,6 +341,26 @@ class AckermannGCSPlanner:
         best_curvature_violation = np.inf
         best_combined_violation = np.inf
         best_attempt = 0
+
+        def _evaluate_trajectory_violations(traj):
+            """评估轨迹的约束违反量，返回 (vel, curv, acc, combined)。"""
+            try:
+                report = self.evaluator.evaluate_trajectory(
+                    traj, constraints
+                )
+                vel_viol = 0.0
+                curv_viol = 0.0
+                acc_viol = 0.0
+                if report.velocity_violation:
+                    vel_viol = report.velocity_violation.max_violation
+                if report.curvature_violation:
+                    curv_viol = report.curvature_violation.max_violation
+                if report.acceleration_violation:
+                    acc_viol = report.acceleration_violation.max_violation
+                combined_viol = vel_viol * 10.0 + curv_viol + acc_viol * 5.0
+                return vel_viol, curv_viol, acc_viol, combined_viol
+            except Exception:
+                return np.inf, np.inf, np.inf, np.inf
 
         for attempt in range(max_solve_attempts):
             # 配置舍入路径数量
@@ -260,28 +374,15 @@ class AckermannGCSPlanner:
             if trajectory_candidate is None:
                 continue
 
-            # 评估速度和曲率违反量
-            try:
-                report = self.evaluator.evaluate_trajectory(
-                    trajectory_candidate, constraints
-                )
-                vel_viol = 0.0
-                curv_viol = 0.0
-                if report.velocity_violation:
-                    vel_viol = report.velocity_violation.max_violation
-                if report.curvature_violation:
-                    curv_viol = report.curvature_violation.max_violation
-                # 综合违反量：速度违反权重更高
-                combined_viol = vel_viol * 10.0 + curv_viol
-            except Exception:
-                vel_viol = np.inf
-                curv_viol = np.inf
-                combined_viol = np.inf
+            # 评估最优轨迹（成本最低的舍入路径）
+            vel_viol, curv_viol, acc_viol, combined_viol = \
+                _evaluate_trajectory_violations(trajectory_candidate)
 
             if verbose and attempt > 0:
                 print(f"  尝试 {attempt+1}: "
                       f"v_viol={vel_viol:.6f}, "
-                      f"κ_viol={curv_viol:.6f}")
+                      f"κ_viol={curv_viol:.6f}, "
+                      f"a_viol={acc_viol:.6f}")
 
             # 选择综合违反量最小的轨迹
             if combined_viol < best_combined_violation:
@@ -291,9 +392,41 @@ class AckermannGCSPlanner:
                 best_trajectory = trajectory_candidate
                 best_attempt = attempt + 1
 
-            # 如果速度和曲率均可行，提前退出
-            if best_velocity_violation < 1e-4 and best_curvature_violation < 1e-4:
+            # 如果速度、曲率和加速度均可行，提前退出
+            if (best_velocity_violation < 1e-4
+                    and best_curvature_violation < 1e-4
+                    and acc_viol < 1e-4):
                 break
+
+            # 在所有候选舍入轨迹中筛选违反量更小的
+            results_dict = result[1] if len(result) > 1 else {}
+            all_candidates = results_dict.get(
+                "all_candidate_trajectories", [])
+            if len(all_candidates) > 1 and best_combined_violation >= 1e-4:
+                if verbose:
+                    print(f"  筛选 {len(all_candidates)} 条候选轨迹...")
+                for idx, cand_traj in enumerate(all_candidates):
+                    if cand_traj is trajectory_candidate:
+                        continue  # 已评估过
+                    cv, ccv, cav, ccv_comb = \
+                        _evaluate_trajectory_violations(cand_traj)
+                    if ccv_comb < best_combined_violation:
+                        best_velocity_violation = cv
+                        best_curvature_violation = ccv
+                        best_combined_violation = ccv_comb
+                        best_trajectory = cand_traj
+                        best_attempt = attempt + 1
+                        if verbose:
+                            print(f"    候选{idx}: "
+                                  f"v={cv:.6f}, κ={ccv:.6f}, "
+                                  f"a={cav:.6f} → 更优")
+                    if (best_velocity_violation < 1e-4
+                            and best_curvature_violation < 1e-4
+                            and best_combined_violation < 1e-4):
+                        break
+                if (best_velocity_violation < 1e-4
+                        and best_curvature_violation < 1e-4):
+                    break
 
         trajectory = best_trajectory
         converged = trajectory is not None
