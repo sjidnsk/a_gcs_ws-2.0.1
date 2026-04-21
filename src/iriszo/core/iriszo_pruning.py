@@ -2,17 +2,27 @@
 区域修剪模块
 
 实现区域修剪功能，过滤掉被更大凸区域完全覆盖的凸区域。
+支持RTree空间索引加速，将冗余区域检测从O(M²)降至O(M log M)。
 
 作者: Path Planning Team
 """
 
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Tuple
 import numpy as np
 import time
+import warnings
 
 from .iriszo_region_data import IrisZoRegion
 from ..config.iriszo_config import IrisZoConfig
+
+# rtree库可用性检测
+try:
+    from rtree import index as rtree_index
+    RTREE_AVAILABLE = True
+except ImportError:
+    RTREE_AVAILABLE = False
+    rtree_index = None
 
 
 @dataclass
@@ -80,14 +90,165 @@ class PruningResult:
         }
 
 
+class RTreeIndex:
+    """
+    基于RTree的区域空间索引
+
+    使用RTree库加速区域的空间查询，支持：
+    - 快速查找边界框相交的候选区域
+    - 基于边界框的空间查询
+    - rtree不可用时回退到全量索引
+
+    边界框提取采用三级策略：
+    1. vertices可用时 → 直接min/max计算
+    2. polyhedron可用时 → 从Axb约束推导边界框
+    3. 兜底 → centroid±sqrt(area)近似
+
+    Attributes:
+        regions: 区域列表
+        num_regions: 区域数量
+        idx: RTree索引实例（rtree不可用时为None）
+        _bounds_cache: 边界框缓存列表
+
+    Example:
+        >>> rtree_idx = RTreeIndex(regions)
+        >>> candidates = rtree_idx.find_potential_overlaps(query_region)
+    """
+
+    def __init__(
+        self,
+        regions: List[IrisZoRegion],
+        leaf_capacity: int = 100
+    ) -> None:
+        """
+        初始化RTree索引
+
+        Args:
+            regions: 区域列表
+            leaf_capacity: RTree叶节点容量（默认100）
+        """
+        self.regions = regions
+        self.num_regions = len(regions)
+        self._bounds_cache: List[Tuple[float, ...]] = []
+
+        if not RTREE_AVAILABLE or not regions:
+            self.idx = None
+            # 仍需计算边界框缓存（供find_potential_overlaps_by_bounds使用）
+            for i, region in enumerate(regions):
+                bounds = self._extract_bounding_box(region)
+                self._bounds_cache.append(bounds)
+            return
+
+        # 创建RTree索引
+        properties = rtree_index.Property()
+        properties.leaf_capacity = leaf_capacity
+        self.idx = rtree_index.Index(properties=properties)
+
+        # 添加每个区域的边界框
+        for i, region in enumerate(regions):
+            bounds = self._extract_bounding_box(region)
+            self._bounds_cache.append(bounds)
+            # RTree使用(min_x, min_y, max_x, max_y)格式
+            self.idx.insert(i, bounds)
+
+    def find_potential_overlaps(
+        self,
+        region: IrisZoRegion
+    ) -> List[int]:
+        """
+        查找可能与指定区域重叠的区域索引
+
+        Args:
+            region: 查询区域
+
+        Returns:
+            可能重叠的区域索引列表（RTree不可用时返回全量索引）
+        """
+        bounds = self._extract_bounding_box(region)
+        return self.find_potential_overlaps_by_bounds(bounds)
+
+    def find_potential_overlaps_by_bounds(
+        self,
+        bounds: Tuple[float, ...]
+    ) -> List[int]:
+        """
+        根据边界框查询可能重叠的区域索引
+
+        Args:
+            bounds: 边界框 (min_x, min_y, max_x, max_y)
+
+        Returns:
+            可能重叠的区域索引列表
+        """
+        if self.idx is None:
+            return list(range(self.num_regions))
+
+        return list(self.idx.intersection(bounds))
+
+    @staticmethod
+    def _extract_bounding_box(
+        region: IrisZoRegion
+    ) -> Tuple[float, float, float, float]:
+        """
+        从IrisZoRegion提取边界框
+
+        提取策略（按优先级）：
+        1. 若vertices可用且非空 → min/max计算
+        2. 若polyhedron可用 → 从Axb约束推导边界框
+        3. 兜底 → centroid±sqrt(area)近似
+
+        Args:
+            region: 区域
+
+        Returns:
+            (min_x, min_y, max_x, max_y)
+        """
+        # 第一级：vertices可用
+        if region.vertices is not None and len(region.vertices) > 0:
+            min_coords = np.min(region.vertices, axis=0)
+            max_coords = np.max(region.vertices, axis=0)
+            return (min_coords[0], min_coords[1], max_coords[0], max_coords[1])
+
+        # 第二级：从Axb约束推导边界框
+        try:
+            if region.polyhedron is not None:
+                A = region.polyhedron.A()
+                b = region.polyhedron.b()
+                dim = A.shape[1]
+
+                # 向量化边界框计算（与iriszo_sampler._get_bounding_box一致）
+                pos_mask = A > 1e-10
+                ratios_pos = np.where(pos_mask, b[:, None] / A, np.inf)
+                ub = np.min(ratios_pos, axis=0)
+
+                neg_mask = A < -1e-10
+                ratios_neg = np.where(neg_mask, b[:, None] / A, -np.inf)
+                lb = np.max(ratios_neg, axis=0)
+
+                # 检查是否有效（非inf）
+                if np.all(np.isfinite(lb)) and np.all(np.isfinite(ub)):
+                    return (lb[0], lb[1], ub[0], ub[1])
+        except Exception:
+            pass
+
+        # 第三级兜底：centroid±sqrt(area)近似
+        radius = np.sqrt(max(region.area, 0.0))
+        cx, cy = region.centroid[0], region.centroid[1]
+        return (cx - radius, cy - radius, cx + radius, cy + radius)
+
+
 class RegionPruner:
     """
     区域修剪器主类
 
     该类提供区域修剪功能，识别并移除被更大区域完全覆盖的冗余区域。
 
+    当RTree可用且启用时，使用空间索引加速候选区域查找，
+    将冗余检测从O(M²)降至O(M log M)；否则回退到双重循环实现。
+
     Attributes:
         config: IrisZo配置对象
+        _use_rtree: 是否使用RTree索引
 
     Example:
         >>> pruner = RegionPruner()
@@ -103,6 +264,10 @@ class RegionPruner:
             config: IrisZo配置对象，可选
         """
         self.config = config or IrisZoConfig()
+        self._use_rtree = (
+            self.config.enable_rtree_pruning
+            and RTREE_AVAILABLE
+        )
 
     def prune(
         self,
@@ -154,7 +319,8 @@ class RegionPruner:
         """
         识别冗余区域的索引
 
-        检查每对区域之间的包含关系，识别被其他区域完全覆盖的区域。
+        当RTree可用且启用时，使用空间索引加速候选区域查找；
+        否则回退到双重循环实现。
 
         Args:
             regions: 凸区域列表
@@ -165,6 +331,24 @@ class RegionPruner:
         Example:
             >>> redundant = pruner.identify_redundant(regions)
             >>> print(f"冗余区域索引: {redundant}")
+        """
+        if self._use_rtree:
+            return self._identify_redundant_rtree(regions)
+        else:
+            return self._identify_redundant_brute_force(regions)
+
+    def _identify_redundant_brute_force(
+        self,
+        regions: List[IrisZoRegion]
+    ) -> List[int]:
+        """
+        使用双重循环识别冗余区域（O(M²)暴力方法）
+
+        Args:
+            regions: 凸区域列表
+
+        Returns:
+            冗余区域索引列表（已排序）
         """
         redundant = set()
 
@@ -177,6 +361,56 @@ class RegionPruner:
                     continue
 
                 # 检查包含关系
+                if region_i.area < region_j.area:
+                    # region_i更小，检查是否被region_j包含
+                    if self.check_containment(region_j, region_i):
+                        redundant.add(i)
+                        break
+                elif region_i.area > region_j.area:
+                    # region_i更大，检查是否包含region_j
+                    if self.check_containment(region_i, region_j):
+                        redundant.add(j)
+
+        return sorted(list(redundant))
+
+    def _identify_redundant_rtree(
+        self,
+        regions: List[IrisZoRegion]
+    ) -> List[int]:
+        """
+        使用RTree空间索引识别冗余区域（O(M log M)加速方法）
+
+        通过RTree查询候选区域替代全量遍历，仅对边界框相交的
+        区域对执行精确的包含关系检查。
+
+        Args:
+            regions: 凸区域列表
+
+        Returns:
+            冗余区域索引列表（已排序）
+        """
+        redundant = set()
+
+        # 构建RTree索引
+        rtree_index_obj = RTreeIndex(
+            regions,
+            leaf_capacity=self.config.rtree_leaf_capacity
+        )
+
+        for i, region_i in enumerate(regions):
+            if i in redundant:
+                continue
+
+            # 通过RTree查找候选区域
+            candidate_indices = rtree_index_obj.find_potential_overlaps(region_i)
+
+            for j in candidate_indices:
+                if i == j or j in redundant:
+                    continue
+
+                region_j = regions[j]
+
+                # 检查包含关系（与暴力方法逻辑一致）
                 if region_i.area < region_j.area:
                     # region_i更小，检查是否被region_j包含
                     if self.check_containment(region_j, region_i):

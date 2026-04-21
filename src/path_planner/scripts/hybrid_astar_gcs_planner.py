@@ -223,7 +223,7 @@ class HybridAStarGCSPlanner:
                     'termination_threshold': iris_config.termination_threshold,
                     'configuration_space_margin': iris_config.configuration_space_margin,
                     'num_samples_per_iteration': 100,
-                    'parallelism': iris_config.num_parallel_workers if hasattr(iris_config, 'num_parallel_workers') else 4,
+                    'num_workers': iris_config.num_parallel_workers if hasattr(iris_config, 'num_parallel_workers') else 8,
                     'enable_two_batch_expansion': iris_config.enable_two_batch_expansion,
                     'strict_coverage_check': iris_config.strict_coverage_check,
                     'verbose': iris_config.verbose,

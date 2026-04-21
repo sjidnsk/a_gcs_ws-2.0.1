@@ -75,7 +75,7 @@ DEFAULT_VEHICLE_PARAMS = VehicleParams(
 SCENARIO_CONFIGS = {
     'basic': {
         'map_size': 200,
-        'start': (18.0, 2.5, 2.5),
+        'start': (18.0, 2.25, 2.5),
         'goal': (18.0, 19.5, 0.1),
         'corridor_width': 100.0
     },

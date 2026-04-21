@@ -76,6 +76,10 @@ class CustomIrisZoAlgorithm:
         self.zero_collision_count = 0
         self.prev_collision_ratio = 1.0
 
+        # Drake调用批量化：A/b缓存
+        self._A_cached: Optional[np.ndarray] = None
+        self._b_cached: Optional[np.ndarray] = None
+
     def run(
         self,
         checker: CollisionCheckerAdapter,
@@ -121,9 +125,17 @@ class CustomIrisZoAlgorithm:
         P = domain
         E = starting_ellipsoid
 
+        # Drake调用批量化：初始化A/b缓存
+        use_drake_batch = self.config.enable_drake_batch
+        if use_drake_batch:
+            self._A_cached = domain.A()
+            self._b_cached = domain.b()
+
         # 外迭代循环
         self.iteration_count = 0
+        self.zero_collision_count = 0
         prev_volume = 0.0
+        prev_collision_ratio = 1.0  # 初始假设高碰撞比例
 
         for iteration in range(self.config.iteration_limit):
             self.iteration_count = iteration + 1
@@ -131,10 +143,20 @@ class CustomIrisZoAlgorithm:
             if self.verbose:
                 print(f"\n外迭代 {iteration + 1}/{self.config.iteration_limit}")
 
-            # 执行一次外迭代
-            P_new, collision_ratio, num_collision = self._outer_iteration(
-                P, E, checker
+            # 计算自适应采样参数
+            adaptive_num, adaptive_mix = self._compute_adaptive_params(
+                prev_collision_ratio, iteration
             )
+
+            # 执行一次外迭代
+            if use_drake_batch:
+                P_new, collision_ratio, num_collision = self._outer_iteration_batch(
+                    P, E, checker, adaptive_num, adaptive_mix
+                )
+            else:
+                P_new, collision_ratio, num_collision = self._outer_iteration(
+                    P, E, checker, adaptive_num, adaptive_mix
+                )
 
             if P_new is None:
                 if self.verbose:
@@ -154,6 +176,8 @@ class CustomIrisZoAlgorithm:
             if self._check_termination(collision_ratio, iteration):
                 if self.verbose:
                     print(f"满足终止条件,碰撞比例: {collision_ratio:.4f}")
+                # 更新碰撞比例（无论是否终止都要更新，供下次自适应计算使用）
+                prev_collision_ratio = collision_ratio
                 break
 
             # 检查体积增长
@@ -167,11 +191,16 @@ class CustomIrisZoAlgorithm:
                     if volume_growth < self.config.termination_threshold:
                         if self.verbose:
                             print("体积增长不足,终止迭代")
+                        # 更新碰撞比例（无论是否终止都要更新，供下次自适应计算使用）
+                        prev_collision_ratio = collision_ratio
                         break
 
                 prev_volume = current_volume
             except Exception:
                 pass
+
+            # 更新碰撞比例供下次自适应计算使用
+            prev_collision_ratio = collision_ratio
 
         elapsed_time = time.time() - start_time
 
@@ -184,7 +213,9 @@ class CustomIrisZoAlgorithm:
         self,
         P: HPolyhedron,
         E: 'Hyperellipsoid',
-        checker: CollisionCheckerAdapter
+        checker: CollisionCheckerAdapter,
+        adaptive_num_samples: int,
+        adaptive_mix_steps: int
     ) -> Tuple[Optional[HPolyhedron], float, int]:
         """
         执行一次外迭代
@@ -193,12 +224,16 @@ class CustomIrisZoAlgorithm:
             P: 当前多面体
             E: 当前内接椭球体
             checker: 碰撞检测器
+            adaptive_num_samples: 自适应采样点数
+            adaptive_mix_steps: 自适应混合步数
 
         Returns:
             (更新后的多面体, 碰撞点比例, 碰撞点数量)
         """
         # Step 1: 采样并执行碰撞检测
-        samples, collision_samples = self._sample_and_check(P, checker)
+        samples, collision_samples = self._sample_and_check(
+            P, checker, adaptive_num_samples, adaptive_mix_steps
+        )
 
         num_samples = len(samples)
         num_collision = len(collision_samples)
@@ -242,10 +277,99 @@ class CustomIrisZoAlgorithm:
 
         return P_new, collision_ratio, num_collision
 
+    def _outer_iteration_batch(
+        self,
+        P: HPolyhedron,
+        E: 'Hyperellipsoid',
+        checker: CollisionCheckerAdapter,
+        adaptive_num_samples: int,
+        adaptive_mix_steps: int
+    ) -> Tuple[Optional[HPolyhedron], float, int]:
+        """
+        执行一次外迭代（Drake调用批量化路径）
+
+        使用A/b缓存避免重复Drake跨语言调用：
+        - sample()直接使用缓存的A/b，不调用polyhedron.A()/b()
+        - update_polyhedron_cache()纯numpy增量更新，不调用Drake
+        - 仅在需要MVIE/Volume时构造HPolyhedron
+
+        Args:
+            P: 当前多面体（仅用于generate()中的_remove_redundant）
+            E: 当前内接椭球体
+            checker: 碰撞检测器
+            adaptive_num_samples: 自适应采样点数
+            adaptive_mix_steps: 自适应混合步数
+
+        Returns:
+            (更新后的多面体, 碰撞点比例, 碰撞点数量)
+        """
+        # 获取椭球中心（用于采样起始点和二分搜索）
+        try:
+            ellipsoid_center = E.center()
+        except Exception:
+            ellipsoid_center = None
+
+        # Step 1: 采样并执行碰撞检测（使用A/b缓存）
+        samples, collision_samples = self._sample_and_check_batch(
+            P, checker, adaptive_num_samples, adaptive_mix_steps,
+            ellipsoid_center=ellipsoid_center
+        )
+
+        num_samples = len(samples)
+        num_collision = len(collision_samples)
+
+        if num_samples == 0:
+            return None, 0.0, 0
+
+        collision_ratio = num_collision / num_samples
+
+        if self.verbose:
+            print(f"采样: {num_samples}个点, 碰撞: {num_collision}个, 比例: {collision_ratio:.4f}")
+
+        # 如果没有碰撞点,返回当前多面体
+        if num_collision == 0:
+            return P, 0.0, 0
+
+        # Step 2: 二分搜索优化碰撞点位置
+        if ellipsoid_center is None:
+            ellipsoid_center = np.mean(collision_samples, axis=0)
+
+        boundary_points = self.bisectioner.search_boundary(
+            collision_samples, ellipsoid_center, checker
+        )
+
+        if self.verbose:
+            print(f"二分搜索完成,边界点: {len(boundary_points)}个")
+
+        # Step 3: 生成并添加分离超平面
+        hyperplanes = self.hyperplane_gen.generate(boundary_points, E, P)
+
+        if len(hyperplanes) == 0:
+            return P, collision_ratio, num_collision
+
+        # Step 4: 增量更新A/b缓存（纯numpy，无Drake调用）
+        self._A_cached, self._b_cached = self.hyperplane_gen.update_polyhedron_cache(
+            self._A_cached, self._b_cached, hyperplanes
+        )
+
+        # 延迟构造HPolyhedron（仅在MVIE/Volume需要时）
+        try:
+            P_new = HPolyhedron(self._A_cached, self._b_cached)
+        except Exception as e:
+            warnings.warn(f"从A/b缓存构造HPolyhedron失败: {e}，回退到原始路径")
+            P_new = self.hyperplane_gen.update_polyhedron(P, hyperplanes)
+
+        if P_new is None:
+            return P, collision_ratio, num_collision
+
+        return P_new, collision_ratio, num_collision
+
     def _sample_and_check(
         self,
         P: HPolyhedron,
-        checker: CollisionCheckerAdapter
+        checker: CollisionCheckerAdapter,
+        num_samples: int,
+        mix_steps: int
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
         采样并执行碰撞检测
@@ -253,6 +377,8 @@ class CustomIrisZoAlgorithm:
         Args:
             P: 当前多面体
             checker: 碰撞检测器
+            num_samples: 采样点数
+            mix_steps: 混合步数
 
         Returns:
             (所有采样点, 碰撞采样点)
@@ -260,7 +386,7 @@ class CustomIrisZoAlgorithm:
         # 在多面体内采样
         try:
             samples = self.sampler.sample(
-                P, self.config.num_samples_per_iteration
+                P, num_samples, mix_steps=mix_steps
             )
         except Exception as e:
             warnings.warn(f"采样失败: {e}")
@@ -270,10 +396,95 @@ class CustomIrisZoAlgorithm:
         collision_results = checker.check_configs_collision_free(samples)
 
         # 分离碰撞点和无碰撞点
-        collision_mask = np.array([not result for result in collision_results])
+        collision_mask = ~np.array(collision_results, dtype=np.bool_)
         collision_samples = samples[collision_mask]
 
         return samples, collision_samples
+
+    def _sample_and_check_batch(
+        self,
+        P: HPolyhedron,
+        checker: CollisionCheckerAdapter,
+        num_samples: int,
+        mix_steps: int,
+        ellipsoid_center: Optional[np.ndarray] = None
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        采样并执行碰撞检测（Drake调用批量化路径）
+
+        使用A/b缓存避免从Drake对象提取约束矩阵。
+
+        Args:
+            P: 当前多面体（仅作为fallback使用）
+            checker: 碰撞检测器
+            num_samples: 采样点数
+            mix_steps: 混合步数
+            ellipsoid_center: 椭球中心（用作采样起始点）
+
+        Returns:
+            (所有采样点, 碰撞采样点)
+        """
+        # 在多面体内采样（使用A/b缓存）
+        try:
+            samples = self.sampler.sample(
+                P, num_samples, mix_steps=mix_steps,
+                A=self._A_cached, b=self._b_cached,
+                ellipsoid_center=ellipsoid_center
+            )
+        except Exception as e:
+            warnings.warn(f"采样失败: {e}")
+            return np.array([]), np.array([])
+
+        # 批量碰撞检测
+        collision_results = checker.check_configs_collision_free(samples)
+
+        # 分离碰撞点和无碰撞点
+        collision_mask = ~np.array(collision_results, dtype=np.bool_)
+        collision_samples = samples[collision_mask]
+
+        return samples, collision_samples
+
+    def _compute_adaptive_params(
+        self,
+        prev_collision_ratio: float,
+        iteration: int
+    ) -> Tuple[int, int]:
+        """
+        根据碰撞比例计算自适应采样参数
+
+        Args:
+            prev_collision_ratio: 上一次迭代的碰撞比例
+            iteration: 当前迭代序号
+
+        Returns:
+            (采样点数, 混合步数)
+        """
+        # 首次迭代：使用混合精度采样（降低mix_steps加速）
+        if iteration == 0:
+            if self.config.enable_adaptive_sampling:
+                return self.config.num_samples_per_iteration, self.config.adaptive_first_iter_mix_steps
+            else:
+                return self.config.num_samples_per_iteration, 20
+
+        # 未启用自适应采样：使用默认参数
+        if not self.config.enable_adaptive_sampling:
+            return self.config.num_samples_per_iteration, 20
+
+        ratio = prev_collision_ratio
+
+        # 异常值保护
+        if not np.isfinite(ratio) or ratio < 0:
+            return self.config.num_samples_per_iteration, 20
+
+        if ratio > self.config.adaptive_high_threshold:
+            # 早期：碰撞比例高，使用完整参数
+            return self.config.num_samples_per_iteration, 20
+        elif ratio > self.config.adaptive_low_threshold:
+            # 中期：适度减少
+            return self.config.adaptive_mid_samples, self.config.adaptive_mid_mix_steps
+        else:
+            # 后期：大幅减少
+            return max(self.config.adaptive_low_samples, self.config.adaptive_min_samples), self.config.adaptive_low_mix_steps
 
     def _check_termination(self, collision_ratio: float, iteration: int) -> bool:
         """
@@ -314,9 +525,6 @@ class CustomIrisZoAlgorithm:
         # 条件4: 达到最大迭代次数
         if iteration >= self.config.iteration_limit - 1:
             return True
-
-        # 更新前一次碰撞比例
-        self.prev_collision_ratio = collision_ratio
 
         return False
 

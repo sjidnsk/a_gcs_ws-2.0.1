@@ -9,6 +9,7 @@
 from dataclasses import dataclass, field
 from typing import List, Optional, Union
 import numpy as np
+import warnings
 
 try:
     from pydrake.geometry.optimization import HPolyhedron
@@ -29,7 +30,6 @@ class IrisZoRegion:
     Attributes:
         polyhedron: Drake HPolyhedron对象,表示凸多面体
         seed_point: 种子点坐标,shape=(dim,)
-        area: 区域面积(2D)或体积(3D+),默认0.0
         centroid: 区域中心坐标,shape=(dim,),默认空数组
         vertices: 顶点数组,shape=(num_vertices, dim),可选
         iteration_count: 生成该区域所需的迭代次数,默认0
@@ -90,7 +90,6 @@ class IrisZoRegion:
                 self.area = self.polyhedron.CalcVolume()
             except Exception:
                 # 如果都失败,保持默认值0.0
-                import warnings
                 warnings.warn(f"计算区域面积失败: {e}")
                 pass
 

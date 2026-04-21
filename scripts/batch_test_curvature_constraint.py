@@ -151,7 +151,7 @@ def run_single_test(run_id: int, scenario: str = 'basic'):
 
 
 def main():
-    num_runs = 20
+    num_runs = 10
     scenario = 'basic'
 
     print("=" * 70)

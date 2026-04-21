@@ -99,6 +99,7 @@ class IrisZoSeedExtractor:
             种子点列表
         """
         seeds = []
+        existing_points = []  # 仅存seed_point的numpy数组，用于向量化距离检查
         min_distance = 0.5  # 最小种子点距离
         sample_interval = 10  # 采样间隔
 
@@ -112,26 +113,40 @@ class IrisZoSeedExtractor:
 
             if 0 <= gx < obstacle_map.shape[1] and 0 <= gy < obstacle_map.shape[0]:
                 if obstacle_map[gy, gx] == 0:
-                    # 检查与已有种子点的距离
-                    if len(seeds) == 0 or all(
-                        np.linalg.norm(seed_point - s[0]) >= min_distance
-                        for s in seeds
-                    ):
+                    # 向量化距离检查
+                    if len(existing_points) == 0:
                         seeds.append((seed_point, None))
+                        existing_points.append(seed_point)
+                    else:
+                        existing = np.array(existing_points)
+                        distances = np.linalg.norm(existing - seed_point, axis=1)
+                        if np.all(distances >= min_distance):
+                            seeds.append((seed_point, None))
+                            existing_points.append(seed_point)
 
         # 确保包含起点和终点
         if len(path) > 0:
             # 起点
             x0, y0, _ = path[0]
             seed0 = np.array([x0, y0])
-            if all(np.linalg.norm(seed0 - s[0]) >= min_distance * 0.5 for s in seeds):
+            if len(existing_points) == 0:
                 seeds.insert(0, (seed0, None))
+                existing_points.insert(0, seed0)
+            else:
+                existing = np.array(existing_points)
+                distances = np.linalg.norm(existing - seed0, axis=1)
+                if np.all(distances >= min_distance * 0.5):
+                    seeds.insert(0, (seed0, None))
+                    existing_points.insert(0, seed0)
 
             # 终点
             x1, y1, _ = path[-1]
             seed1 = np.array([x1, y1])
-            if all(np.linalg.norm(seed1 - s[0]) >= min_distance * 0.5 for s in seeds):
+            existing = np.array(existing_points)
+            distances = np.linalg.norm(existing - seed1, axis=1)
+            if np.all(distances >= min_distance * 0.5):
                 seeds.append((seed1, None))
+                existing_points.append(seed1)
 
         return seeds
 
@@ -160,6 +175,7 @@ class IrisZoSeedExtractor:
             return []
 
         seeds = []
+        existing_points = []  # 仅存seed_point的numpy数组，用于向量化距离检查
         min_distance = 0.3
 
         # 检查每个路径点是否被覆盖
@@ -184,12 +200,16 @@ class IrisZoSeedExtractor:
                 else:
                     tangent = None
 
-                # 检查与已有种子点的距离
-                if len(seeds) == 0 or all(
-                    np.linalg.norm(point - s[0]) >= min_distance
-                    for s in seeds
-                ):
+                # 向量化距离检查
+                if len(existing_points) == 0:
                     seeds.append((point, tangent))
+                    existing_points.append(point)
+                else:
+                    existing = np.array(existing_points)
+                    distances = np.linalg.norm(existing - point, axis=1)
+                    if np.all(distances >= min_distance):
+                        seeds.append((point, tangent))
+                        existing_points.append(point)
 
         return seeds
 

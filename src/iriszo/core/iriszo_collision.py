@@ -10,6 +10,12 @@ import numpy as np
 from typing import List, Tuple, Optional, Dict, Any
 from iris_pkg.core.lru_cache import LRUCache
 
+try:
+    from scipy.ndimage import binary_dilation
+    _HAS_SCIPY = True
+except ImportError:
+    _HAS_SCIPY = False
+
 
 class CollisionCheckerAdapter:
     """
@@ -78,6 +84,20 @@ class CollisionCheckerAdapter:
 
         # 计算安全边界的栅格数
         self.safety_margin_grid = int(np.ceil(safety_margin / resolution))
+
+        # 预计算膨胀地图（safety_margin > 0时）
+        if self.safety_margin_grid > 0 and _HAS_SCIPY:
+            struct = np.ones(
+                (2 * self.safety_margin_grid + 1,
+                 2 * self.safety_margin_grid + 1),
+                dtype=bool
+            )
+            self._dilated_map = binary_dilation(
+                obstacle_map > 0, structure=struct
+            ).astype(np.uint8)
+            self._query_map = self._dilated_map
+        else:
+            self._query_map = obstacle_map
 
     def _world_to_grid(self, x: float, y: float) -> Tuple[int, int]:
         """
@@ -155,8 +175,12 @@ class CollisionCheckerAdapter:
             if cached is not None:
                 return cached
 
-        # 执行碰撞检测
-        result = self._check_grid_collision(gx, gy)
+        # 执行碰撞检测：始终使用_query_map直接查表
+        # _query_map已包含safety_margin膨胀（通过scipy binary_dilation预计算）
+        if not (0 <= gx < self.width and 0 <= gy < self.height):
+            result = False  # 超出边界视为碰撞
+        else:
+            result = (self._query_map[gy, gx] == 0)
 
         # 更新缓存
         if self.enable_cache and self._cache is not None:
@@ -210,11 +234,11 @@ class CollisionCheckerAdapter:
         parallelize: bool = True
     ) -> List[bool]:
         """
-        批量检查多个配置点是否无碰撞
+        批量检查多个配置点是否无碰撞（numpy向量化）
 
         Args:
             configs: 配置点列表
-            parallelize: 是否并行处理(当前未实现并行)
+            parallelize: 是否并行处理(保留接口兼容)
 
         Returns:
             布尔结果列表
@@ -223,9 +247,59 @@ class CollisionCheckerAdapter:
             >>> configs = [np.array([1.0, 1.0]), np.array([2.0, 2.0])]
             >>> results = checker.check_configs_collision_free(configs)
         """
-        # TODO: 实现并行处理
-        # 当前使用串行处理
-        return [self.check_config_collision_free(q) for q in configs]
+        n = len(configs)
+        if n == 0:
+            return []
+
+        # 转为2D数组 (N, dim)
+        points = np.asarray(configs)
+        if points.ndim == 1:
+            points = points.reshape(1, -1)
+
+        # 向量化坐标转换
+        gx = ((points[:, 0] - self.origin[0]) / self.resolution).astype(np.int32)
+        gy = ((points[:, 1] - self.origin[1]) / self.resolution).astype(np.int32)
+
+        # 结果数组：True=无碰撞
+        results = np.zeros(n, dtype=np.bool_)
+
+        # 向量化边界检查
+        in_bounds = (0 <= gx) & (gx < self.width) & (0 <= gy) & (gy < self.height)
+        # 超出边界视为碰撞（results已初始化为False）
+
+        if self.enable_cache and self._cache is not None:
+            # 缓存路径：先查缓存，未命中点批量检测
+            uncached_indices = []
+            uncached_gx = []
+            uncached_gy = []
+
+            for i in range(n):
+                if not in_bounds[i]:
+                    continue
+                cached = self._cache.get((int(gx[i]), int(gy[i])))
+                if cached is not None:
+                    results[i] = cached
+                else:
+                    uncached_indices.append(i)
+                    uncached_gx.append(int(gx[i]))
+                    uncached_gy.append(int(gy[i]))
+
+            # 批量检测未命中点
+            if uncached_indices:
+                uc_gx = np.array(uncached_gx, dtype=np.int32)
+                uc_gy = np.array(uncached_gy, dtype=np.int32)
+                uc_results = (self._query_map[uc_gy, uc_gx] == 0)
+
+                for j, idx in enumerate(uncached_indices):
+                    results[idx] = uc_results[j]
+                    self._cache.put((uncached_gx[j], uncached_gy[j]), bool(uc_results[j]))
+        else:
+            # 无缓存路径：纯numpy向量化
+            valid_gx = gx[in_bounds]
+            valid_gy = gy[in_bounds]
+            results[in_bounds] = (self._query_map[valid_gy, valid_gx] == 0)
+
+        return results.tolist()
 
     def get_cache_stats(self) -> Dict[str, Any]:
         """

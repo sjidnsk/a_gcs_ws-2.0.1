@@ -88,20 +88,27 @@ class SeparatingHyperplaneGenerator:
             warnings.warn("无法获取椭球体中心,使用碰撞点平均")
             ellipsoid_center = np.mean(collision_points, axis=0)
 
-        # 为每个碰撞点生成超平面
-        hyperplanes = []
-        for collision_point in collision_points:
-            n, b = self._generate_single(collision_point, ellipsoid_center)
-            hyperplanes.append((n, b))
+        # 向量化生成超平面
+        d = collision_points - ellipsoid_center  # (N, dim)
+        norms = np.linalg.norm(d, axis=1, keepdims=True)  # (N, 1)
+
+        # 处理零向量：碰撞点与中心重合时使用随机方向
+        zero_mask = (norms < 1e-10).squeeze()
+        if np.any(zero_mask):
+            num_zero = int(np.sum(zero_mask))
+            d[zero_mask] = np.random.randn(num_zero, d.shape[1])
+            norms[zero_mask] = np.linalg.norm(d[zero_mask], axis=1, keepdims=True)
+
+        n = d / norms  # (N, dim) 法向量
+        b = np.sum(n * collision_points, axis=1)  # (N,) 偏移
+
+        hyperplanes = [(n[i], b[i]) for i in range(len(n))]
 
         # 移除冗余超平面
-        if self.config.verbose and len(hyperplanes) > 0:
-            print(f"生成{len(hyperplanes)}个超平面,开始移除冗余...")
-
         non_redundant = self._remove_redundant(hyperplanes, current_polyhedron)
 
-        if self.config.verbose:
-            print(f"移除冗余后剩余{len(non_redundant)}个超平面")
+        if self.config.verbose and len(hyperplanes) != len(non_redundant):
+            print(f"生成{len(hyperplanes)}个超平面,移除冗余后剩余{len(non_redundant)}个")
 
         return non_redundant
 
@@ -185,6 +192,36 @@ class SeparatingHyperplaneGenerator:
             hyperplanes.append((n, b))
         return hyperplanes
 
+    def update_polyhedron_cache(
+        self,
+        A_cached: np.ndarray,
+        b_cached: np.ndarray,
+        hyperplanes: List[Tuple[np.ndarray, float]]
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        使用新超平面增量更新A/b缓存（纯numpy，无Drake调用）
+
+        Args:
+            A_cached: 当前缓存的约束矩阵 (m × dim)
+            b_cached: 当前缓存的约束向量 (m,)
+            hyperplanes: 新超平面列表
+
+        Returns:
+            (A_updated, b_updated) 更新后的缓存
+        """
+        if len(hyperplanes) == 0:
+            return A_cached, b_cached
+
+        # 向量化构建新约束矩阵
+        A_new = np.array([n for n, b in hyperplanes])
+        b_new = np.array([b for n, b in hyperplanes])
+
+        # 增量合并（纯numpy，无Drake调用）
+        A_updated = np.vstack([A_cached, A_new])
+        b_updated = np.concatenate([b_cached, b_new])
+
+        return A_updated, b_updated
+
     def update_polyhedron(
         self,
         current_polyhedron: HPolyhedron,
@@ -217,16 +254,9 @@ class SeparatingHyperplaneGenerator:
             A_current = current_polyhedron.A()
             b_current = current_polyhedron.b()
 
-            # 构建新约束矩阵
-            num_new = len(hyperplanes)
-            dim = A_current.shape[1]
-
-            A_new = np.zeros((num_new, dim))
-            b_new = np.zeros(num_new)
-
-            for i, (n, b) in enumerate(hyperplanes):
-                A_new[i] = n
-                b_new[i] = b
+            # 向量化构建新约束矩阵
+            A_new = np.array([n for n, b in hyperplanes])
+            b_new = np.array([b for n, b in hyperplanes])
 
             # 合并约束
             A_combined = np.vstack([A_current, A_new])

@@ -2,6 +2,7 @@
 自定义IrisZo算法二分搜索模块
 
 实现二分搜索边界定位器,在每个搜索方向上精确定位碰撞边界。
+支持精度自适应和并行化优化。
 
 作者: Path Planning Team
 """
@@ -9,6 +10,7 @@
 import numpy as np
 from typing import List, Tuple
 import warnings
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
     from pydrake.geometry.optimization import Hyperellipsoid
@@ -35,6 +37,10 @@ class BisectionSearcher:
            b. 如果m有碰撞,则b = m
            c. 否则a = m
         4. 返回b作为边界点
+
+    优化特性:
+        - 精度自适应: 根据碰撞点到中心的距离动态调整步数
+        - 并行化: 多个碰撞点的二分搜索使用ThreadPoolExecutor并行执行
 
     Attributes:
         config: 配置参数
@@ -80,18 +86,101 @@ class BisectionSearcher:
         num_points = collision_points.shape[0]
         boundary_points = np.zeros_like(collision_points)
 
-        for i in range(num_points):
-            boundary_points[i] = self._bisection_single(
-                collision_points[i], ellipsoid_center, checker
-            )
+        # 计算自适应步数
+        steps_array = self._compute_adaptive_steps(collision_points, ellipsoid_center)
+
+        # 判断是否启用并行
+        use_parallel = (
+            self.config.enable_parallel_bisection
+            and num_points >= self.config.parallel_bisection_threshold
+        )
+
+        if use_parallel:
+            workers = min(self.config.parallel_bisection_workers, num_points)
+            try:
+                with ThreadPoolExecutor(max_workers=workers) as executor:
+                    futures = {}
+                    for i in range(num_points):
+                        future = executor.submit(
+                            self._bisection_single,
+                            collision_points[i], ellipsoid_center, checker, steps_array[i]
+                        )
+                        futures[future] = i
+
+                    for future in as_completed(futures):
+                        idx = futures[future]
+                        try:
+                            boundary_points[idx] = future.result()
+                        except Exception as e:
+                            warnings.warn(
+                                f"碰撞点{idx}的二分搜索失败: {e}, 使用碰撞点本身作为边界点"
+                            )
+                            boundary_points[idx] = collision_points[idx]
+            except Exception as e:
+                warnings.warn(f"线程池创建失败: {e}, 回退到串行执行")
+                for i in range(num_points):
+                    boundary_points[i] = self._bisection_single(
+                        collision_points[i], ellipsoid_center, checker, steps_array[i]
+                    )
+        else:
+            # 串行路径
+            for i in range(num_points):
+                boundary_points[i] = self._bisection_single(
+                    collision_points[i], ellipsoid_center, checker, steps_array[i]
+                )
 
         return boundary_points
+
+    def _compute_adaptive_steps(
+        self,
+        collision_points: np.ndarray,
+        center: np.ndarray
+    ) -> np.ndarray:
+        """
+        计算每个碰撞点的自适应二分搜索步数
+
+        距离中心越远的碰撞点,使用越多的步数(远距离区间大,需要更多步数保证精度);
+        距离中心越近的碰撞点,使用越少的步数(近距离区间小,少量步数即可满足精度)。
+
+        Args:
+            collision_points: 碰撞点数组,shape=(N, dim)
+            center: 椭球体中心
+
+        Returns:
+            步数数组,shape=(N,)
+        """
+        num_points = collision_points.shape[0]
+
+        # 未启用自适应时,所有点使用固定步数
+        if not self.config.enable_adaptive_bisection:
+            return np.full(num_points, self.config.bisection_steps, dtype=np.int32)
+
+        min_steps = self.config.min_bisection_steps
+        max_steps = self.config.max_bisection_steps
+
+        # 计算每个碰撞点到中心的距离
+        distances = np.linalg.norm(collision_points - center, axis=1)
+
+        # 归一化距离指标 ∈ (0, 1]
+        max_dist = np.max(distances) if len(distances) > 0 else 1.0
+        normalized_dist = distances / max(max_dist, 1e-8)
+
+        # 线性映射: 距离越大 → 步数越多(远距离区间大,需要更高精度)
+        # normalized_dist=0 (最近) → min_steps
+        # normalized_dist=1 (最远) → max_steps
+        steps = min_steps + (max_steps - min_steps) * normalized_dist
+
+        # 钳位到有效范围并转为整数
+        steps = np.clip(steps, min_steps, max_steps).astype(np.int32)
+
+        return steps
 
     def _bisection_single(
         self,
         collision_point: np.ndarray,
         center: np.ndarray,
-        checker: CollisionCheckerAdapter
+        checker: CollisionCheckerAdapter,
+        steps: int = None
     ) -> np.ndarray:
         """
         对单个碰撞点执行二分搜索
@@ -100,16 +189,20 @@ class BisectionSearcher:
             collision_point: 碰撞点
             center: 椭球体中心(无碰撞)
             checker: 碰撞检测器
+            steps: 二分搜索步数,若为None则使用配置默认值
 
         Returns:
             边界点
         """
-        # 初始化区间
-        a = center.copy()
-        b = collision_point.copy()
+        if steps is None:
+            steps = self.config.bisection_steps
+
+        # 初始化区间（不copy，二分搜索中a/b会被重新赋值）
+        a = center
+        b = collision_point
 
         # 执行二分搜索
-        for _ in range(self.config.bisection_steps):
+        for _ in range(steps):
             # 计算中点
             m = (a + b) / 2.0
 
@@ -179,5 +272,10 @@ class BisectionSearcher:
         return (
             f"BisectionSearcher(\n"
             f"  bisection_steps={self.config.bisection_steps}\n"
+            f"  adaptive={self.config.enable_adaptive_bisection}, "
+            f"min={self.config.min_bisection_steps}, max={self.config.max_bisection_steps}\n"
+            f"  parallel={self.config.enable_parallel_bisection}, "
+            f"workers={self.config.parallel_bisection_workers}, "
+            f"threshold={self.config.parallel_bisection_threshold}\n"
             f")"
         )

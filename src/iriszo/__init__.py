@@ -61,7 +61,7 @@ from .core.iriszo_distance_query import (
 )
 
 # 导入区域修剪
-from .core.iriszo_pruning import RegionPruner, PruningResult
+from .core.iriszo_pruning import RegionPruner, PruningResult, RTreeIndex, RTREE_AVAILABLE
 
 # 导入性能报告
 from .core.iriszo_performance import (
@@ -123,6 +123,8 @@ __all__ = [
     # 区域修剪
     'RegionPruner',
     'PruningResult',
+    'RTreeIndex',
+    'RTREE_AVAILABLE',
 
     # 性能报告
     'PerformanceReporter',
