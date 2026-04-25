@@ -289,10 +289,12 @@ class GCSOptimizer:
             randomForwardPathSearch,
             randomBackwardPathSearch,
         )
+        from config.solver.mosek_opt_config import MosekOptimizationConfig
+        _mosek_opt_config = MosekOptimizationConfig()
         gcs.setRoundingStrategy(
             [randomForwardPathSearch, randomBackwardPathSearch],
             flow_tol=1e-5,
-            max_paths=10,
+            max_paths=_mosek_opt_config.effective_max_paths(),
             max_trials=100,
         )
         

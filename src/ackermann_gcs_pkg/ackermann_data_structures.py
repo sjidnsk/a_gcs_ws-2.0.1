@@ -266,7 +266,7 @@ class BezierConfig:
     full_dim_overlap: bool = False
     hyperellipsoid_num_samples_per_dim_factor: int = 32
     max_rounding_attempts: int = 3
-    max_rounded_paths: int = 10
+    max_rounded_paths: int = 5
 
     def __post_init__(self):
         """参数验证"""
@@ -401,13 +401,16 @@ class CurvatureStats:
     """
     曲率统计信息
 
+    所有统计量（max、min、mean、std）均基于 |κ|（曲率绝对值）计算，
+    描述轨迹弯曲程度的分布特征，不含方向信息。
+
     Attributes:
-        max_curvature: 最大曲率
-        min_curvature: 最小曲率
-        mean_curvature: 平均曲率
-        std_curvature: 曲率标准差
+        max_curvature: 最大曲率绝对值，max(|κ|)
+        min_curvature: 最小曲率绝对值，min(|κ|)
+        mean_curvature: 平均曲率绝对值，mean(|κ|)
+        std_curvature: 曲率绝对值的标准差，std(|κ|)
         max_curvature_location: 最大曲率位置（参数s）
-        curvature_samples: 曲率采样点（可选）
+        curvature_samples: 曲率采样点（带符号，可选）
     """
     max_curvature: float
     min_curvature: float

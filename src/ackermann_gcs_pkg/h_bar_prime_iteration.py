@@ -143,7 +143,15 @@ def iterate_h_bar_prime(
             if verbose:
                 print("[h̄' Iteration] Solving without curvature constraint...")
         else:
-            # 后续迭代：添加曲率约束
+            # 后续迭代：先移除旧曲率约束，再添加新约束
+            if bezier_gcs.curvature_constraints:
+                if verbose:
+                    print(
+                        "[h̄' Iteration] Removing previous curvature "
+                        "constraints..."
+                    )
+                bezier_gcs.removeCurvatureHardConstraints(verbose=verbose)
+
             effective_hbp = h_bar_prime * dynamic_safety_factor
             if verbose:
                 print(
@@ -193,6 +201,10 @@ def iterate_h_bar_prime(
                         f"h̄' *= {relax_factor} -> {h_bar_prime:.6f}"
                     )
                 try:
+                    # 先移除当前曲率约束，再添加放宽后的约束
+                    bezier_gcs.removeCurvatureHardConstraints(
+                        verbose=verbose
+                    )
                     bezier_gcs.addCurvatureHardConstraint(
                         max_curvature=constraints.max_curvature,
                         min_velocity=constraints.min_velocity,

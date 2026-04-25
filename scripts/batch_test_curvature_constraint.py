@@ -218,7 +218,7 @@ def main():
         print(f"  标准差: {np.std(max_curvatures):.6f}")
         print(f"  最小: {np.min(max_curvatures):.6f}")
         print(f"  最大: {np.max(max_curvatures):.6f}")
-        print(f"  κ_max限制: 0.230940")
+        print(f"  κ_max限制: {DEFAULT_VEHICLE_PARAMS.max_curvature:.6f}")
 
         print(f"\n--- 曲率违反量 ---")
         print(f"  均值: {np.mean(curv_violations):.6f}")

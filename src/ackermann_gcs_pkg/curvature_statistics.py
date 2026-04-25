@@ -154,11 +154,12 @@ class CurvatureStatistics:
             for t in t_array
         ])
 
-        # 统计计算
-        max_kappa = np.max(np.abs(kappa_array))
-        min_kappa = np.min(np.abs(kappa_array))
-        mean_kappa = np.mean(np.abs(kappa_array))
-        std_kappa = np.std(kappa_array)
+        # 统计计算（所有统计量统一在 |κ| 上计算，保持语义一致性）
+        abs_kappa = np.abs(kappa_array)
+        max_kappa = np.max(abs_kappa)
+        min_kappa = np.min(abs_kappa)
+        mean_kappa = np.mean(abs_kappa)
+        std_kappa = np.std(abs_kappa)
 
         # 找到最大曲率位置
         max_idx = np.argmax(np.abs(kappa_array))

@@ -223,7 +223,9 @@ class BezierGCS(BaseGCS):
                 DecomposeLinearExpressions(time_continuity_error, edge_vars), 0.0))
 
         # 存储导数约束和边成本
-        self.deriv_constraints = []
+        self.deriv_constraints = []           # 仅速度约束
+        self.curvature_constraints = []       # 仅曲率约束
+        self._curvature_constraint_bindings = []  # (edge, binding) 对
         self.edge_costs = []
 
         # 添加边到图中并应用约束
@@ -876,14 +878,17 @@ class BezierGCS(BaseGCS):
             # 约束：A @ x + b ∈ LorentzCone
             curvature_con = LorentzConeConstraint(H, b)
 
-            # 存储约束对象
-            self.deriv_constraints.append(curvature_con)
+            # 存储到曲率约束专用列表（非deriv_constraints）
+            self.curvature_constraints.append(curvature_con)
 
-            # 对所有GCS边添加约束（跳过源点边）
+            # 对所有GCS边添加约束（跳过源点边），并保存Binding
             for edge in self.gcs.Edges():
                 if edge.u() == self.source:
                     continue
-                edge.AddConstraint(Binding[Constraint](curvature_con, edge.xu()))
+                binding = edge.AddConstraint(
+                    Binding[Constraint](curvature_con, edge.xu())
+                )
+                self._curvature_constraint_bindings.append((edge, binding))
 
     def addCurvatureHardConstraintForEdges(
         self, max_curvature, min_velocity,
@@ -963,16 +968,106 @@ class BezierGCS(BaseGCS):
             b[0] = C
 
             curvature_con = LorentzConeConstraint(H, b)
-            self.deriv_constraints.append(curvature_con)
+            self.curvature_constraints.append(curvature_con)
 
-            # 对所有GCS边添加约束（跳过源点边和边界边）
+            # 对所有GCS边添加约束（跳过源点边和边界边），并保存Binding
             for edge in self.gcs.Edges():
                 if edge.u() == self.source:
                     continue
                 # 跳过边界段（起终点v=0附近）
                 if boundary_edge_ids is not None and id(edge) in boundary_edge_ids:
                     continue
-                edge.AddConstraint(Binding[Constraint](curvature_con, edge.xu()))
+                binding = edge.AddConstraint(
+                    Binding[Constraint](curvature_con, edge.xu())
+                )
+                self._curvature_constraint_bindings.append((edge, binding))
+
+    def removeCurvatureHardConstraints(self, verbose=False):
+        """移除GCS图上所有已添加的曲率硬约束。
+
+        由于Drake Python binding不提供edge.RemoveConstraint()，
+        采用边重建方案：收集所有受影响的普通边（非source/target边），
+        移除后重建，重新添加连续性约束、速度约束和成本。
+
+        source/target边上的曲率约束数量极少（仅order-1个），
+        对性能影响可忽略，且重建这些边需要重新添加addSourceTarget
+        中的大量专用约束，代价过高，因此跳过。
+
+        Args:
+            verbose: 是否输出移除过程的日志。
+
+        Returns:
+            int: 重建的边数量。
+        """
+        if not self._curvature_constraint_bindings:
+            # 没有曲率约束需要移除
+            return 0
+
+        # 收集所有受曲率约束影响的普通边（去重，保持顺序）
+        # 跳过source/target边，因为重建它们需要重新添加addSourceTarget
+        # 中的专用约束，代价过高
+        affected_edges = []
+        seen_edge_ids = set()
+        skipped_edges = []
+        for edge, _binding in self._curvature_constraint_bindings:
+            edge_id = id(edge)
+            if edge_id not in seen_edge_ids:
+                seen_edge_ids.add(edge_id)
+                # 跳过source/target边
+                if (self.target is not None and
+                        (edge.u() == self.target or
+                         edge.v() == self.target)):
+                    skipped_edges.append(edge)
+                    continue
+                affected_edges.append(edge)
+
+        # 记录每条受影响边的端点，然后移除并重建
+        num_rebuilt = 0
+        for old_edge in affected_edges:
+            u_vertex = old_edge.u()
+            v_vertex = old_edge.v()
+            edge_name = old_edge.name()
+
+            # 移除旧边
+            self.gcs.RemoveEdge(old_edge)
+
+            # 重建边
+            new_edge = self.gcs.AddEdge(u_vertex, v_vertex, edge_name)
+
+            # 重新添加连续性约束
+            for c_con in self.contin_constraints:
+                new_edge.AddConstraint(Binding[Constraint](
+                    c_con, np.append(u_vertex.x(), v_vertex.x())
+                ))
+
+            # 重新添加速度约束（跳过源点边）
+            if u_vertex != self.source:
+                for d_con in self.deriv_constraints:
+                    new_edge.AddConstraint(
+                        Binding[Constraint](d_con, new_edge.xu())
+                    )
+
+                # 重新添加成本
+                for cost in self.edge_costs:
+                    new_edge.AddCost(Binding[Cost](cost, new_edge.xu()))
+
+            num_rebuilt += 1
+
+        if verbose and num_rebuilt > 0:
+            msg = f"Removed curvature constraints by rebuilding {num_rebuilt} edges"
+            if skipped_edges:
+                msg += f" (skipped {len(skipped_edges)} target edges)"
+            print(msg)
+
+        # 清空记录（包括skipped_edges的binding）
+        self._curvature_constraint_bindings.clear()
+        self.curvature_constraints.clear()
+
+        # 边重建后，_phi_updater的_prev_path_edges中的边引用已失效，必须reset
+        if self._phi_updater is not None:
+            self._phi_updater.reset()
+
+        return num_rebuilt
 
     def _isSourceInVertexRegion(self, source, vertex):
         """检查源点是否在顶点区域内"""
@@ -1123,9 +1218,16 @@ class BezierGCS(BaseGCS):
             for cost in self.edge_costs:
                 edge.AddCost(Binding[Cost](cost, edge.xu()))
 
-            # 为目标点边添加所有导数约束
+            # 为目标点边添加速度约束
             for d_con in self.deriv_constraints:
                 edge.AddConstraint(Binding[Constraint](d_con, edge.xu()))
+
+            # 为目标点边添加当前有效的曲率约束
+            for d_con in self.curvature_constraints:
+                binding = edge.AddConstraint(
+                    Binding[Constraint](d_con, edge.xu())
+                )
+                self._curvature_constraint_bindings.append((edge, binding))
 
         return source_edges, target_edges
 

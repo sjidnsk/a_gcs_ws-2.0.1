@@ -19,6 +19,8 @@ from pydrake.all import le # Drake 中用于添加线性不等式约束的辅助
 
 from gcs_pkg.scripts.rounding import MipPathExtraction # 自定义的路径提取策略（例如，从 MIP 解中提取）
 from gcs_pkg.scripts.solver import AdaptiveSolverConfig, SolverPerformanceProfile
+from gcs_pkg.scripts.core.phi_updater import IncrementalPhiUpdater
+from config.solver.mosek_opt_config import MosekOptimizationConfig
 
 def polytopeDimension(A, b, tol=1e-4):
     """
@@ -276,7 +278,8 @@ def intersectionDimension(set1, set2, tol=1e-4):
 # BaseGCS 类是基于图搜索的凸优化方法 (GCS) 的基础实现
 class BaseGCS:
     def __init__(self, regions, auto_add_vertices=True, 
-                 solver_config: Optional[AdaptiveSolverConfig] = None):
+                 solver_config: Optional[AdaptiveSolverConfig] = None,
+                 mosek_opt_config: Optional[MosekOptimizationConfig] = None):
         """
         初始化 GCS 图结构。
 
@@ -285,6 +288,7 @@ class BaseGCS:
                                     或者是以名称为键、凸集为值的字典。
             auto_add_vertices (bool): 是否自动添加顶点到图中。默认为True。
             solver_config (AdaptiveSolverConfig, optional): 自适应求解器配置。默认为None。
+            mosek_opt_config (MosekOptimizationConfig, optional): MOSEK优化配置。默认为None(使用默认优化值)。
         """
         self.names = None # 存储顶点的名称
         # 检查输入是否为字典，如果是，则提取名称和区域
@@ -316,6 +320,10 @@ class BaseGCS:
         # 初始化自适应求解器配置
         self.solver_config = solver_config if solver_config is not None else AdaptiveSolverConfig()
         self.solver_profile: Optional[SolverPerformanceProfile] = None
+
+        # 初始化MOSEK优化配置
+        self._mosek_opt_config = mosek_opt_config or MosekOptimizationConfig()
+        self._phi_updater = IncrementalPhiUpdater() if self._mosek_opt_config.enable_incremental_phi else None
 
         # 自动添加顶点到图中
         if auto_add_vertices:
@@ -516,6 +524,7 @@ class BaseGCS:
         """
         设置论文中常用的特定求解器选项，通常用于实验或复现结果。
         这里设置了 MOSEK 求解器的一些参数。
+        使用MosekOptimizationConfig中的优化值替代硬编码。
         """
         solver_options = SolverOptions()
         # 在控制台打印求解过程信息
@@ -526,8 +535,12 @@ class BaseGCS:
         solver_options.SetOption(MosekSolver.id(), "MSK_IPAR_INTPNT_SOLVE_FORM", 1)
         # 设置混合整数优化 (MIO) 相对间隙容差
         solver_options.SetOption(MosekSolver.id(), "MSK_DPAR_MIO_TOL_REL_GAP", 1e-3)
-        # 设置 MIO 最大求解时间 (秒)
-        solver_options.SetOption(MosekSolver.id(), "MSK_DPAR_MIO_MAX_TIME", 3600.0)
+        # 设置 MIO 最大求解时间 (秒) - 使用优化配置值替代硬编码3600.0
+        solver_options.SetOption(MosekSolver.id(), "MSK_DPAR_MIO_MAX_TIME",
+                                 self._mosek_opt_config.effective_mio_max_time())
+        # 设置 MOSEK 线程数 - 使用优化配置值
+        solver_options.SetOption(MosekSolver.id(), "MSK_IPAR_NUM_THREADS",
+                                 self._mosek_opt_config.effective_num_threads())
         self.options.solver_options = solver_options # 应用设置的参数
 
     def setRoundingStrategy(self, rounding_fn, **kwargs):
@@ -566,6 +579,9 @@ class BaseGCS:
         # 清除图中所有边的 Phi 约束 (这些约束用于固定边的启用/禁用状态，通常在舍入后设置)
         for edge in self.gcs.Edges():
             edge.ClearPhiConstraints()
+        # 重置增量Phi更新器状态
+        if self._phi_updater is not None:
+            self._phi_updater.reset()
 
 
     def VisualizeGraph(self, file_type="svg"):
@@ -658,6 +674,22 @@ class BaseGCS:
             if verbose:
                 print(f"自动配置求解器: 顶点={num_vertices}, 边={num_edges}, 维度={self.dimension}")
 
+        # 用MosekOptimizationConfig覆盖AdaptiveSolverConfig的MOSEK关键参数
+        # 确保MosekOptimizationConfig作为统一配置入口的实际生效
+        if self.options.solver_options is not None:
+            solver_opts = self.options.solver_options
+            solver_id = MosekSolver.id()
+            # 覆盖MIO时间限制
+            solver_opts.SetOption(solver_id, "MSK_DPAR_MIO_MAX_TIME",
+                                  self._mosek_opt_config.effective_mio_max_time())
+            # 覆盖线程数
+            solver_opts.SetOption(solver_id, "MSK_IPAR_NUM_THREADS",
+                                  self._mosek_opt_config.effective_num_threads())
+
+        # 打印MOSEK优化配置摘要
+        if verbose:
+            print(self._mosek_opt_config.summary())
+
         # 配置 GCS 选项
         self.options.convex_relaxation = rounding # 是否求解松弛问题
         self.options.preprocessing = preprocessing # 是否启用预处理
@@ -707,6 +739,11 @@ class BaseGCS:
 
         # --- 处理舍入步骤 (如果启用了舍入) ---
         if rounding and len(self.rounding_fn) > 0: # 如果使用舍入且提供了舍入策略
+            # 每次进入Rounding循环前reset phi_updater，确保从干净状态开始
+            # 避免跨solveGCS调用的_prev_path_edges残留导致增量更新错误
+            if self._phi_updater is not None:
+                self._phi_updater.reset()
+
             active_edges = [] # 存储所有舍入策略找到的路径
             found_path = False # 标记是否找到了至少一条路径
 
@@ -745,16 +782,19 @@ class BaseGCS:
 
             # 对每个找到的路径进行第二次精确求解
             for path_edges in active_edges:
-                # 清除上一条路径的 Phi 约束，确保每次求解在干净状态下执行
-                for edge in self.gcs.Edges():
-                    edge.ClearPhiConstraints()
-
-                # 遍历图中所有边，根据当前路径 (path_edges) 固定其启用/禁用状态 (phi)
-                for edge in self.gcs.Edges():
-                    if edge in path_edges: # 如果边在当前路径中
-                        edge.AddPhiConstraint(True) # 约束 phi = True (启用边)
-                    else: # 如果边不在当前路径中
-                        edge.AddPhiConstraint(False) # 约束 phi = False (禁用边)
+                # 使用增量或全量Phi约束更新
+                if self._phi_updater is not None:
+                    # 增量Phi约束更新：仅修改与上一条路径差异的边
+                    self._phi_updater.update_phi_constraints(self.gcs, path_edges)
+                else:
+                    # 全量Phi约束更新（回退方式）：清除所有边再重建
+                    for edge in self.gcs.Edges():
+                        edge.ClearPhiConstraints()
+                    for edge in self.gcs.Edges():
+                        if edge in path_edges:
+                            edge.AddPhiConstraint(True)
+                        else:
+                            edge.AddPhiConstraint(False)
 
                 # 求解固定路径后的 GCS 问题（这是一个凸优化问题）
                 rounded_results.append(self.gcs.SolveShortestPath(
