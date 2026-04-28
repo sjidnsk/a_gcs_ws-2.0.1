@@ -126,6 +126,7 @@ class AckermannGCSPlanner:
             regions=workspace_regions,
             vehicle_params=self.vehicle_params,
             bezier_config=self.bezier_config,
+            curvature_constraint_version=getattr(constraints, 'curvature_constraint_version', 'v1'),
         )
 
         # 步骤3：添加起终点约束
@@ -173,23 +174,67 @@ class AckermannGCSPlanner:
         h_bar_prime_iteration_result = None
         if constraints.enable_curvature_hard_constraint or \
            constraints.curvature_constraint_mode == "hard":
-            if verbose:
-                print("\n" + "=" * 70)
-                print("曲率硬约束添加")
-                print("=" * 70)
-                print(f"约束类型: 凸硬约束（Lorentz锥）")
-                print(f"约束形式: ||Q_j||_2 <= C = kappa_max * rho_min^2")
-                print(f"最大曲率: {constraints.max_curvature:.4f} 1/m")
-                print(f"最小速度: {constraints.min_velocity:.4f} m/s")
-                print(f"h_bar_prime: {constraints.h_bar_prime}")
-                print(f"safety_factor: {constraints.h_bar_prime_safety_factor}")
-                print(f"max_iterations: {constraints.max_h_bar_prime_iterations}")
-                print(f"凸性保证: 二阶锥约束（Lorentz锥）")
-                print(f"保守性: Cauchy-Schwarz + 凸包 + 速度下界")
-                if constraints.min_velocity > 0:
-                    alpha = (constraints.max_velocity / constraints.min_velocity) ** 2
-                    print(f"保守因子 alpha: {alpha:.1f}")
-                print("=" * 70)
+
+            # v2模式：旋转二阶锥速度耦合方案
+            if getattr(constraints, 'curvature_constraint_version', 'v1') == "v2":
+                if verbose:
+                    print("\n" + "=" * 70)
+                    print("曲率硬约束v2添加（旋转二阶锥速度耦合）")
+                    print("=" * 70)
+                    print(f"约束类型: SOCP (Lorentz锥 + RotatedLorentz锥 + 线性)")
+                    print(f"约束形式: A1: qᵢ·d_θ≥σ_e, A2: τ_e≥σ_e², B: κ_max·τ_e≥‖Qⱼ‖, C: σ_e≥σ_min")
+                    print(f"最大曲率: {constraints.max_curvature:.4f} 1/m")
+                    print(f"sigma_min: {constraints.sigma_min}")
+                    print(f"凸性保证: SOCP约束（旋转二阶锥+Lorentz锥+线性）")
+                    print(f"保守性: 1/cos(φ) ≈ 1.02~1.15 (vs v1的25~100)")
+                    print("=" * 70)
+
+                try:
+                    # 获取边界边ID
+                    boundary_edge_ids = set()
+                    if hasattr(bezier_gcs, '_classify_edges'):
+                        classified = bezier_gcs._classify_edges(verbose=False)
+                        boundary_edge_ids = classified.get('boundary_edge_ids', set())
+
+                    result_v2 = bezier_gcs.addCurvatureHardConstraintV2(
+                        max_curvature=constraints.max_curvature,
+                        boundary_edge_ids=boundary_edge_ids,
+                        sigma_min=constraints.sigma_min,
+                        ackermann_gcs=bezier_gcs,
+                        source_heading=source.heading,
+                        target_heading=target.heading,
+                    )
+                    if verbose:
+                        if result_v2 is not None:
+                            print(f"✓ v2曲率约束添加完成: "
+                                  f"{result_v2.num_interior_edges}条内部边, "
+                                  f"共{result_v2.total_constraints}个约束")
+                        else:
+                            print("⚠️  v2曲率约束回退到v1")
+                except Exception as e:
+                    if verbose:
+                        print(f"⚠️  v2曲率约束添加失败: {e}")
+                        print("   将跳过曲率硬约束，仅使用成本项软引导")
+
+            else:
+                # v1模式：原有Lorentz锥方案
+                if verbose:
+                    print("\n" + "=" * 70)
+                    print("曲率硬约束添加")
+                    print("=" * 70)
+                    print(f"约束类型: 凸硬约束（Lorentz锥）")
+                    print(f"约束形式: ||Q_j||_2 <= C = kappa_max * rho_min^2")
+                    print(f"最大曲率: {constraints.max_curvature:.4f} 1/m")
+                    print(f"最小速度: {constraints.min_velocity:.4f} m/s")
+                    print(f"h_bar_prime: {constraints.h_bar_prime}")
+                    print(f"safety_factor: {constraints.h_bar_prime_safety_factor}")
+                    print(f"max_iterations: {constraints.max_h_bar_prime_iterations}")
+                    print(f"凸性保证: 二阶锥约束（Lorentz锥）")
+                    print(f"保守性: Cauchy-Schwarz + 凸包 + 速度下界")
+                    if constraints.min_velocity > 0:
+                        alpha = (constraints.max_velocity / constraints.min_velocity) ** 2
+                        print(f"保守因子 alpha: {alpha:.1f}")
+                    print("=" * 70)
 
             # 判断是否使用迭代修正模式
             use_iteration = (
@@ -224,6 +269,7 @@ class AckermannGCSPlanner:
                     bezier_gcs.addDerivativeRegularization(weight_r, weight_h, reg_order)
 
                 # 执行迭代修正
+                is_v2 = getattr(constraints, 'curvature_constraint_version', 'v1') == "v2"
                 iter_traj, h_bar_prime_iteration_result = iterate_h_bar_prime(
                     bezier_gcs=bezier_gcs,
                     constraints=constraints,
@@ -232,6 +278,7 @@ class AckermannGCSPlanner:
                     target=target,
                     workspace_regions=workspace_regions,
                     verbose=verbose,
+                    skip_for_v2=is_v2,
                 )
 
                 if iter_traj is not None:
@@ -242,6 +289,9 @@ class AckermannGCSPlanner:
                         print(f"✓ 迭代修正完成: h̄'={hbp_res.h_bar_prime:.6f}, "
                               f"effective={hbp_res.effective_h_bar_prime:.6f}, "
                               f"C={C:.6f}")
+                elif is_v2:
+                    if verbose:
+                        print("✓ v2模式跳过h̄'迭代（σ_e是优化变量，无需迭代修正）")
                 else:
                     if verbose:
                         print("⚠️  迭代修正求解失败，将跳过曲率硬约束")

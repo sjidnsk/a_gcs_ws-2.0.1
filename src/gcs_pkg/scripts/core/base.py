@@ -727,7 +727,20 @@ class BaseGCS:
 
         # 检查第一次求解是否成功
         if not result.is_success():
-            print("First solve failed") # 打印失败信息
+            print("First solve failed")
+            print(f"  Solution result: {result.get_solution_result()}")
+            try:
+                details = result.get_solver_details()
+                print(f"  Solver details: {details}")
+                # 尝试获取MOSEK不可行证明
+                if hasattr(details, 'solution_status'):
+                    print(f"  Solution status: {details.solution_status}")
+                if hasattr(details, 'code'):
+                    print(f"  Code: {details.code}")
+                if hasattr(details, 'msg'):
+                    print(f"  Message: {details.msg}")
+            except Exception as e:
+                print(f"  Error getting details: {e}")
             return None, None, results_dict # 返回失败结果
 
         # 如果要求详细输出，则打印第一次求解的信息

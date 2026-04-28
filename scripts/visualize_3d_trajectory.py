@@ -64,7 +64,9 @@ def visualize_3d_trajectory_interactive(
     show_control_points: bool = True,
     control_point_size: Optional[int] = None,
     control_point_color: Optional[str] = None,
-    control_point_marker: Optional[str] = None
+    control_point_marker: Optional[str] = None,
+    curvature_constraint_version: str = 'v1',
+    sigma_min: str = 'auto',
 ):
     """
     交互式3D轨迹可视化
@@ -83,6 +85,8 @@ def visualize_3d_trajectory_interactive(
     """
     print("=" * 60)
     print(f"3D配置空间轨迹可视化 - 场景: {scenario}")
+    if curvature_constraint_version == 'v2':
+        print(f"曲率约束: v2 (旋转二阶锥速度耦合, sigma_min={sigma_min})")
     print("=" * 60)
     
     # 1. 获取场景配置
@@ -142,6 +146,8 @@ def visualize_3d_trajectory_interactive(
         enable_curvature_hard_constraint=True,
         min_velocity=3.0,  # 提高速度下界以收紧曲率约束
         curvature_constraint_mode="hard",
+        curvature_constraint_version=curvature_constraint_version,
+        sigma_min=sigma_min,
     )
     
     ackermann_planner = AckermannGCSPlanner(
@@ -484,6 +490,19 @@ def main():
         default=None,
         help='控制点标记形状（默认D菱形）'
     )
+    parser.add_argument(
+        '--curvature-constraint-version',
+        type=str,
+        choices=['v1', 'v2'],
+        default='v1',
+        help='曲率约束版本: v1(Lorentz锥) 或 v2(旋转二阶锥) (default: v1)'
+    )
+    parser.add_argument(
+        '--sigma-min',
+        type=str,
+        default='auto',
+        help='v2模式sigma_min参数 (default: auto)'
+    )
     
     args = parser.parse_args()
     
@@ -498,7 +517,9 @@ def main():
         show_control_points=not args.no_control_points,
         control_point_size=args.control_point_size,
         control_point_color=args.control_point_color,
-        control_point_marker=args.control_point_marker
+        control_point_marker=args.control_point_marker,
+        curvature_constraint_version=args.curvature_constraint_version,
+        sigma_min=args.sigma_min,
     )
 
 

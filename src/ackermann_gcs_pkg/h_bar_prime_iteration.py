@@ -92,6 +92,7 @@ def iterate_h_bar_prime(
     target,
     workspace_regions,
     verbose: bool = True,
+    skip_for_v2: bool = False,
 ) -> Tuple[Optional[object], HBarPrimeIterationResult]:
     """执行 h̄' 迭代修正流程。
 
@@ -110,10 +111,27 @@ def iterate_h_bar_prime(
         target: 终点状态。
         workspace_regions: 工作空间区域。
         verbose: 是否输出详细日志。
+        skip_for_v2: v2模式下跳过迭代（σ_e是优化变量，无需h̄'迭代）。
 
     Returns:
         (最优轨迹, 迭代结果)。轨迹可能为 None（求解失败）。
     """
+    # v2模式下跳过h̄'迭代
+    if skip_for_v2:
+        if verbose:
+            print("[CURVATURE_V2] v2模式下跳过h̄'迭代（σ_e是优化变量）")
+        no_iter_result = HBarPrimeIterationResult(
+            h_bar_prime=1.0,
+            effective_h_bar_prime=1.0,
+            converged=True,
+            num_iterations=0,
+            iteration_history=[],
+            convergence_reason="skipped_for_v2",
+            relax_attempts=0,
+            final_safety_factor=1.0,
+        )
+        return None, no_iter_result
+
     from gcs_pkg.scripts.core.bezier import BezierGCS
 
     max_iterations = constraints.max_h_bar_prime_iterations

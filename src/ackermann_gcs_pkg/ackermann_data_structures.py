@@ -13,7 +13,7 @@
 """
 
 from dataclasses import dataclass, field, asdict
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Union
 from enum import Enum
 import numpy as np
 
@@ -167,6 +167,11 @@ class TrajectoryConstraints:
     h_bar_prime_relax_factor: float = 1.3
     max_h_bar_prime_relax_attempts: int = 3
     h_bar_prime_safety_factor_decay: float = 0.8
+    curvature_constraint_version: str = "v1"
+    """曲率约束版本: 'v1'(Lorentz锥) 或 'v2'(旋转二阶锥)"""
+    sigma_min: Union[float, str] = "auto"
+    """σ_e的最小下界，防止σ_e→0导致约束退化。仅v2模式使用。
+    "auto"自动推导，或用户显式指定正数。"""
 
     def __post_init__(self):
         """参数验证"""
@@ -212,6 +217,17 @@ class TrajectoryConstraints:
             raise ValueError(
                 f"h_bar_prime_safety_factor_decay must be in (0, 1.0], "
                 f"got {self.h_bar_prime_safety_factor_decay}"
+            )
+        # v2曲率约束参数验证
+        if self.curvature_constraint_version not in ("v1", "v2"):
+            raise ValueError(
+                f"curvature_constraint_version must be 'v1' or 'v2', "
+                f"got {self.curvature_constraint_version}"
+            )
+        if isinstance(self.sigma_min, (int, float)) and self.sigma_min <= 0:
+            raise ValueError(
+                f"sigma_min must be positive when specified as a number, "
+                f"got {self.sigma_min}"
             )
 
     @classmethod
