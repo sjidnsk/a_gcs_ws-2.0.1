@@ -699,8 +699,11 @@ class BaseGCS:
         problem_hash = None
         if self.solver_profile and self.solver_profile.enable_warm_start and self.source and self.target:
             # 计算问题哈希
-            source_pos = self.source.set().x()
-            target_pos = self.target.set().x()
+            # Point类型用.x()，HPolyhedron类型用.ChebyshevCenter()
+            source_set = self.source.set()
+            target_set = self.target.set()
+            source_pos = source_set.x() if isinstance(source_set, Point) else source_set.ChebyshevCenter()
+            target_pos = target_set.x() if isinstance(target_set, Point) else target_set.ChebyshevCenter()
             problem_hash = self.solver_config.compute_problem_hash(
                 self.gcs, source_pos, target_pos
             )
@@ -714,6 +717,25 @@ class BaseGCS:
 
         # 第一次求解：求解松弛问题或 MIP
         result = self.gcs.SolveShortestPath(self.source, self.target, self.options)
+
+        # MOSEK数值问题回退：当MOSEK返回kSolverSpecificError时，
+        # 自动回退到SCS求解器（对v2扩展顶点的数值条件更鲁棒）
+        if not result.is_success():
+            from pydrake.solvers import ScsSolver
+            try:
+                fallback_options = GraphOfConvexSetsOptions()
+                fallback_options.convex_relaxation = self.options.convex_relaxation
+                fallback_options.preprocessing = self.options.preprocessing
+                fallback_options.solver = ScsSolver()
+                fallback_result = self.gcs.SolveShortestPath(
+                    self.source, self.target, fallback_options)
+                if fallback_result.is_success():
+                    if verbose:
+                        print("MOSEK求解失败，自动回退到SCS求解器成功")
+                    result = fallback_result
+                    results_dict["solver_fallback"] = "MOSEK->SCS"
+            except Exception:
+                pass  # 回退也失败，继续使用原始结果
 
         # 根据是否使用舍入来存储第一次求解的结果
         if rounding: # 如果使用舍入

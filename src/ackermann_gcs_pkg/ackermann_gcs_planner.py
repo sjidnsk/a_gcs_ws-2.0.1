@@ -126,6 +126,7 @@ class AckermannGCSPlanner:
             regions=workspace_regions,
             vehicle_params=self.vehicle_params,
             bezier_config=self.bezier_config,
+            curvature_constraint_version=constraints.curvature_constraint_version,
         )
 
         # 步骤3：添加起终点约束
@@ -173,101 +174,133 @@ class AckermannGCSPlanner:
         h_bar_prime_iteration_result = None
         if constraints.enable_curvature_hard_constraint or \
            constraints.curvature_constraint_mode == "hard":
-            if verbose:
-                print("\n" + "=" * 70)
-                print("曲率硬约束添加")
-                print("=" * 70)
-                print(f"约束类型: 凸硬约束（Lorentz锥）")
-                print(f"约束形式: ||Q_j||_2 <= C = kappa_max * rho_min^2")
-                print(f"最大曲率: {constraints.max_curvature:.4f} 1/m")
-                print(f"最小速度: {constraints.min_velocity:.4f} m/s")
-                print(f"h_bar_prime: {constraints.h_bar_prime}")
-                print(f"safety_factor: {constraints.h_bar_prime_safety_factor}")
-                print(f"max_iterations: {constraints.max_h_bar_prime_iterations}")
-                print(f"凸性保证: 二阶锥约束（Lorentz锥）")
-                print(f"保守性: Cauchy-Schwarz + 凸包 + 速度下界")
-                if constraints.min_velocity > 0:
-                    alpha = (constraints.max_velocity / constraints.min_velocity) ** 2
-                    print(f"保守因子 alpha: {alpha:.1f}")
-                print("=" * 70)
 
-            # 判断是否使用迭代修正模式
-            use_iteration = (
-                constraints.h_bar_prime is None
-                and constraints.max_h_bar_prime_iterations > 1
-            )
-
-            if use_iteration:
-                # 迭代修正模式：先求解无曲率约束，再迭代修正 h̄'
+            # v2模式：旋转二阶锥速度耦合方案
+            if getattr(constraints, 'curvature_constraint_version', 'v1') == 'v2':
                 if verbose:
-                    print("[Planner] Using iterative h̄' refinement mode")
+                    print("\n" + "=" * 70)
+                    print("曲率硬约束v2添加（旋转二阶锥速度耦合）")
+                    print("=" * 70)
+                    print(f"约束类型: 旋转二阶锥 + 线性速度下界")
+                    print(f"约束形式: A1:q_i·d_θ≥σ_e, A2:τ_e≥σ_e², B:κ_max·τ_e≥‖Q_j‖, C:σ_e≥σ_min")
+                    print(f"最大曲率: {constraints.max_curvature:.4f} 1/m")
+                    print(f"sigma_min: {constraints.sigma_min}")
+                    print(f"凸性保证: SOCP（旋转锥+Lorentz锥+线性）")
+                    print(f"保守性: 消除(v_max/v_min)²因子")
+                    print("=" * 70)
 
-                # 先添加成本函数（迭代修正需要）
-                if cost_weights is None:
-                    cost_weights = {"time": 1.0, "path_length": 0.1, "energy": 0.01}
-
-                if "time" in cost_weights and cost_weights["time"] > 0:
-                    bezier_gcs.addTimeCost(cost_weights["time"])
-                if "path_length" in cost_weights and cost_weights["path_length"] > 0:
-                    bezier_gcs.addPathLengthCost(cost_weights["path_length"])
-                if "energy" in cost_weights and cost_weights["energy"] > 0:
-                    bezier_gcs.addPathEnergyCost(cost_weights["energy"])
-                if "time_derivative_reg" in cost_weights and cost_weights["time_derivative_reg"] > 0:
-                    h_ref = cost_weights.get("h_ref", None)
-                    bezier_gcs.addTimeDerivativeRegularization(
-                        cost_weights["time_derivative_reg"], h_ref=h_ref
+                try:
+                    result_v2 = bezier_gcs.addCurvatureHardConstraintV2(
+                        max_curvature=constraints.max_curvature,
+                        sigma_min=constraints.sigma_min,
                     )
-                if "regularization_r" in cost_weights and cost_weights["regularization_r"] > 0:
-                    weight_r = cost_weights["regularization_r"]
-                    weight_h = cost_weights.get("regularization_h", 0.0)
-                    reg_order = cost_weights.get("regularization_order", 2)
-                    bezier_gcs.addDerivativeRegularization(weight_r, weight_h, reg_order)
-
-                # 执行迭代修正
-                iter_traj, h_bar_prime_iteration_result = iterate_h_bar_prime(
-                    bezier_gcs=bezier_gcs,
-                    constraints=constraints,
-                    cost_weights=cost_weights,
-                    source=source,
-                    target=target,
-                    workspace_regions=workspace_regions,
-                    verbose=verbose,
-                )
-
-                if iter_traj is not None:
                     if verbose:
-                        hbp_res = h_bar_prime_iteration_result
-                        rho_min = constraints.min_velocity * hbp_res.effective_h_bar_prime
-                        C = constraints.max_curvature * rho_min ** 2
-                        print(f"✓ 迭代修正完成: h̄'={hbp_res.h_bar_prime:.6f}, "
-                              f"effective={hbp_res.effective_h_bar_prime:.6f}, "
-                              f"C={C:.6f}")
-                else:
+                        if result_v2 is not None:
+                            print(f"✓ v2曲率约束添加完成: {result_v2.summary()}")
+                        else:
+                            print("⚠️  v2前提不满足，已回退到v1")
+                except Exception as e:
                     if verbose:
-                        print("⚠️  迭代修正求解失败，将跳过曲率硬约束")
+                        print(f"⚠️  v2曲率约束添加失败: {e}")
+                        print("   将跳过曲率硬约束")
 
             else:
-                # 直接模式：使用指定 h̄' 或默认值 1.0
-                try:
-                    bezier_gcs.addCurvatureHardConstraint(
-                        max_curvature=constraints.max_curvature,
-                        min_velocity=constraints.min_velocity,
-                        h_bar_prime=constraints.h_bar_prime,
-                        h_bar_prime_safety_factor=constraints.h_bar_prime_safety_factor,
+                # v1模式：原有Lorentz锥方案
+                if verbose:
+                    print("\n" + "=" * 70)
+                    print("曲率硬约束添加")
+                    print("=" * 70)
+                    print(f"约束类型: 凸硬约束（Lorentz锥）")
+                    print(f"约束形式: ||Q_j||_2 <= C = kappa_max * rho_min^2")
+                    print(f"最大曲率: {constraints.max_curvature:.4f} 1/m")
+                    print(f"最小速度: {constraints.min_velocity:.4f} m/s")
+                    print(f"h_bar_prime: {constraints.h_bar_prime}")
+                    print(f"safety_factor: {constraints.h_bar_prime_safety_factor}")
+                    print(f"max_iterations: {constraints.max_h_bar_prime_iterations}")
+                    print(f"凸性保证: 二阶锥约束（Lorentz锥）")
+                    print(f"保守性: Cauchy-Schwarz + 凸包 + 速度下界")
+                    if constraints.min_velocity > 0:
+                        alpha = (constraints.max_velocity / constraints.min_velocity) ** 2
+                        print(f"保守因子 alpha: {alpha:.1f}")
+                    print("=" * 70)
+
+                # 判断是否使用迭代修正模式
+                use_iteration = (
+                    constraints.h_bar_prime is None
+                    and constraints.max_h_bar_prime_iterations > 1
+                )
+
+                if use_iteration:
+                    # 迭代修正模式：先求解无曲率约束，再迭代修正 h̄'
+                    if verbose:
+                        print("[Planner] Using iterative h̄' refinement mode")
+
+                    # 先添加成本函数（迭代修正需要）
+                    if cost_weights is None:
+                        cost_weights = {"time": 1.0, "path_length": 0.1, "energy": 0.01}
+
+                    if "time" in cost_weights and cost_weights["time"] > 0:
+                        bezier_gcs.addTimeCost(cost_weights["time"])
+                    if "path_length" in cost_weights and cost_weights["path_length"] > 0:
+                        bezier_gcs.addPathLengthCost(cost_weights["path_length"])
+                    if "energy" in cost_weights and cost_weights["energy"] > 0:
+                        bezier_gcs.addPathEnergyCost(cost_weights["energy"])
+                    if "time_derivative_reg" in cost_weights and cost_weights["time_derivative_reg"] > 0:
+                        h_ref = cost_weights.get("h_ref", None)
+                        bezier_gcs.addTimeDerivativeRegularization(
+                            cost_weights["time_derivative_reg"], h_ref=h_ref
+                        )
+                    if "regularization_r" in cost_weights and cost_weights["regularization_r"] > 0:
+                        weight_r = cost_weights["regularization_r"]
+                        weight_h = cost_weights.get("regularization_h", 0.0)
+                        reg_order = cost_weights.get("regularization_order", 2)
+                        bezier_gcs.addDerivativeRegularization(weight_r, weight_h, reg_order)
+
+                    # 执行迭代修正
+                    iter_traj, h_bar_prime_iteration_result = iterate_h_bar_prime(
+                        bezier_gcs=bezier_gcs,
+                        constraints=constraints,
+                        cost_weights=cost_weights,
+                        source=source,
+                        target=target,
+                        workspace_regions=workspace_regions,
+                        verbose=verbose,
                     )
-                    if verbose:
-                        hbp = constraints.h_bar_prime if constraints.h_bar_prime is not None else 1.0
-                        effective = hbp * constraints.h_bar_prime_safety_factor
-                        rho_min = constraints.min_velocity * effective
-                        C = constraints.max_curvature * rho_min ** 2
-                        print(f"rho_min: {rho_min:.4f}")
-                        print(f"约束阈值 C: {C:.6f}")
-                        print(f"effective h̄': {effective:.6f}")
-                        print("✓ 曲率硬约束添加完成")
-                except ValueError as e:
-                    if verbose:
-                        print(f"⚠️  曲率硬约束添加失败: {e}")
-                        print("   将跳过曲率硬约束，仅使用成本项软引导")
+
+                    if iter_traj is not None:
+                        if verbose:
+                            hbp_res = h_bar_prime_iteration_result
+                            rho_min = constraints.min_velocity * hbp_res.effective_h_bar_prime
+                            C = constraints.max_curvature * rho_min ** 2
+                            print(f"✓ 迭代修正完成: h̄'={hbp_res.h_bar_prime:.6f}, "
+                                  f"effective={hbp_res.effective_h_bar_prime:.6f}, "
+                                  f"C={C:.6f}")
+                    else:
+                        if verbose:
+                            print("⚠️  迭代修正求解失败，将跳过曲率硬约束")
+
+                else:
+                    # 直接模式：使用指定 h̄' 或默认值 1.0
+                    try:
+                        bezier_gcs.addCurvatureHardConstraint(
+                            max_curvature=constraints.max_curvature,
+                            min_velocity=constraints.min_velocity,
+                            h_bar_prime=constraints.h_bar_prime,
+                            h_bar_prime_safety_factor=constraints.h_bar_prime_safety_factor,
+                        )
+                        if verbose:
+                            hbp = constraints.h_bar_prime if constraints.h_bar_prime is not None else 1.0
+                            effective = hbp * constraints.h_bar_prime_safety_factor
+                            rho_min = constraints.min_velocity * effective
+                            C = constraints.max_curvature * rho_min ** 2
+                            print(f"rho_min: {rho_min:.4f}")
+                            print(f"约束阈值 C: {C:.6f}")
+                            print(f"effective h̄': {effective:.6f}")
+                            print("✓ 曲率硬约束添加完成")
+                    except ValueError as e:
+                        if verbose:
+                            print(f"⚠️  曲率硬约束添加失败: {e}")
+                            print("   将跳过曲率硬约束，仅使用成本项软引导")
 
         # 步骤5：添加成本函数
         if verbose:

@@ -54,6 +54,7 @@ class AckermannBezierGCS(BezierGCS):
         regions: List[HPolyhedron],
         vehicle_params: VehicleParams,
         bezier_config: Optional[BezierConfig] = None,
+        curvature_constraint_version: str = "v1",
     ):
         """
         初始化阿克曼贝塞尔GCS
@@ -62,6 +63,7 @@ class AckermannBezierGCS(BezierGCS):
             regions: 工作空间区域列表
             vehicle_params: 车辆参数
             bezier_config: 贝塞尔曲线配置，如果为None则使用默认配置
+            curvature_constraint_version: 曲率约束版本，"v1"(Lorentz锥)或"v2"(旋转二阶锥)
         """
         # 使用默认配置
         if bezier_config is None:
@@ -75,6 +77,7 @@ class AckermannBezierGCS(BezierGCS):
             hdot_min=bezier_config.hdot_min,
             full_dim_overlap=bezier_config.full_dim_overlap,
             hyperellipsoid_num_samples_per_dim_factor=bezier_config.hyperellipsoid_num_samples_per_dim_factor,
+            curvature_constraint_version=curvature_constraint_version,
         )
 
         # 存储车辆参数和贝塞尔配置

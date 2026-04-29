@@ -79,7 +79,7 @@ class BezierGCS(BaseGCS):
     并在顶点之间添加B样条曲线的连续性约束，实现平滑轨迹规划。
     """
     
-    def __init__(self, regions, order, continuity, edges=None, hdot_min=0.01, full_dim_overlap=False, hyperellipsoid_num_samples_per_dim_factor=32):
+    def __init__(self, regions, order, continuity, edges=None, hdot_min=0.01, full_dim_overlap=False, hyperellipsoid_num_samples_per_dim_factor=32, curvature_constraint_version="v1"):
         """
         初始化贝塞尔GCS
         
@@ -90,6 +90,8 @@ class BezierGCS(BaseGCS):
             edges (list, optional): 指定的边连接关系，默认为None时自动计算
             hdot_min (float): 时间导数的最小值，确保时间单调递增
             full_dim_overlap (bool): 是否要求区域交集维度为全维度
+            curvature_constraint_version (str): 曲率约束版本，"v1"(Lorentz锥)或"v2"(旋转二阶锥)
+                v2模式下顶点凸集预扩展+2维(σ_e, τ_e)
         """
         # 调用基类初始化
         BaseGCS.__init__(self, regions, auto_add_vertices=False)
@@ -110,6 +112,25 @@ class BezierGCS(BaseGCS):
                             np.eye(order, order + 1) - np.eye(order, order + 1, 1)))
         b_time = np.concatenate((1e3*np.ones(order + 1), np.zeros(order + 1), -hdot_min * np.ones(order)))
         self.time_scaling_set = HPolyhedron(A_time, b_time)
+
+        # 存储曲率约束版本和顶点扩展标记
+        self.curvature_constraint_version = curvature_constraint_version
+        self._vertex_extended = False
+        # source/target辅助变量固定点（v2模式下用于维度扩展）
+        self._source_target_aux_point = None
+
+        # v2模式：预构建有界辅助变量空间用于顶点维度扩展
+        # σ_e ∈ [σ_min, v_max], τ_e ∈ [σ_min², v_max²]
+        # 有界集确保GCS凸松弛数值稳定
+        if curvature_constraint_version == "v2":
+            # 使用保守的物理上界，实际值由约束决定
+            sigma_ub = 100.0   # σ_e ≤ v_max (速度上界)
+            tau_ub = 10000.0   # τ_e ≤ v_max² (速度平方上界)
+            sigma_lb = 0.001   # σ_e ≥ σ_min (最小速度下界)
+            A_aux = np.array([[-1, 0], [1, 0], [0, -1], [0, 1]], dtype=float)
+            b_aux = np.array([-sigma_lb, sigma_ub, 0, tau_ub], dtype=float)
+            self._free_R2 = HPolyhedron(A_aux, b_aux)
+            self._vertex_extended = True
 
         for i, r in enumerate(self.regions):
             # 检查区域类型
@@ -151,23 +172,19 @@ class BezierGCS(BaseGCS):
             elif isinstance(r, HPolyhedron):
                  # 如果已经是 HPolyhedron，直接使用
                  region_poly = r
-            # elif isinstance(r, Point):
-            #      # 如果是 Point，也尝试转换为 HPolyhedron
-            #      print(f"Warning: Converting Point at index {i} to HPolyhedron approximation for BezierGCS vertex.")
-            #      try:
-            #         region_poly = r.ToVPolytope().MakeHPolyhedron()
-            #      except Exception as e:
-            #          print(f"  Error converting Point at index {i} to HPolyhedron: {e}")
-            #          raise RuntimeError(f"Failed to convert Point at index {i} to HPolyhedron.") from e
             else:
                  # 如果是其他未知类型，抛出错误或警告
                  raise TypeError(f"Region type {type(r)} at index {i} is not supported by BezierGCS. "
                                  f"Supported types are HPolyhedron, Hyperellipsoid, and Point.")
-        # 为每个区域顶点添加控制点
-        # 每个顶点的凸集 = 区域凸集^(order+1) × 时间缩放凸集
-        # 即每个顶点有 (order+1) 个空间控制点和 (order+1) 个时间控制点
+
+            # 为每个区域顶点添加控制点
+            # 每个顶点的凸集 = 区域凸集^(order+1) × 时间缩放凸集
+            # 即每个顶点有 (order+1) 个空间控制点和 (order+1) 个时间控制点
             # 使用转换后的 region_poly (一定是 HPolyhedron) 来构建顶点集合
             vertex_set = region_poly.CartesianPower(order + 1).CartesianProduct(self.time_scaling_set)
+            # v2模式：扩展顶点凸集 × ℝ² (σ_e, τ_e)
+            if self._vertex_extended:
+                vertex_set = vertex_set.CartesianProduct(self._free_R2)
             self.gcs.AddVertex(vertex_set, name = self.names[i] if not self.names is None else '')
 
         # 定义边上的变量：u控制点、v控制点、u时间、v时间
@@ -180,6 +197,12 @@ class BezierGCS(BaseGCS):
 
         # 存储u顶点的所有变量（控制点+时间）
         self.u_vars = np.concatenate((u_control.flatten("F"), u_duration))
+
+        # v2模式：扩展u_vars，追加σ_e和τ_e辅助变量
+        if curvature_constraint_version == "v2":
+            sigma_var = MakeVectorContinuousVariable(1, "sigma")[0]
+            tau_var = MakeVectorContinuousVariable(1, "tau")[0]
+            self.u_vars = np.concatenate([self.u_vars, [sigma_var, tau_var]])
         
         # 创建u顶点的空间轨迹（B样条）
         self.u_r_trajectory = BsplineTrajectory_[Expression](
@@ -191,7 +214,20 @@ class BezierGCS(BaseGCS):
             np.expand_dims(u_duration, 0))
 
         # 边上所有变量
-        edge_vars = np.concatenate((u_control.flatten("F"), u_duration, v_control.flatten("F"), v_duration))
+        # v2模式：辅助变量需插入到每个顶点变量之后，使edge_vars布局与
+        # np.append(u.x(), v.x())一致：[u空间, u时间, u辅助, v空间, v时间, v辅助]
+        # 否则Binding[Constraint](con, np.append(u.x(), v.x()))的列映射会错位
+        if curvature_constraint_version == "v2":
+            u_sigma_var = MakeVectorContinuousVariable(1, "sigma_u")[0]
+            u_tau_var = MakeVectorContinuousVariable(1, "tau_u")[0]
+            v_sigma_var = MakeVectorContinuousVariable(1, "sigma_v")[0]
+            v_tau_var = MakeVectorContinuousVariable(1, "tau_v")[0]
+            edge_vars = np.concatenate([u_control.flatten("F"), u_duration,
+                                        [u_sigma_var, u_tau_var],
+                                        v_control.flatten("F"), v_duration,
+                                        [v_sigma_var, v_tau_var]])
+        else:
+            edge_vars = np.concatenate((u_control.flatten("F"), u_duration, v_control.flatten("F"), v_duration))
         
         # 创建v顶点的空间轨迹（B样条）
         v_r_trajectory = BsplineTrajectory_[Expression](
@@ -211,22 +247,54 @@ class BezierGCS(BaseGCS):
             # 连续性条件：v轨迹的起始点 = u轨迹的终点
             path_continuity_error = v_path_deriv.control_points()[0] - u_path_deriv.control_points()[-1]
             # 添加线性等式约束
+            path_A = DecomposeLinearExpressions(path_continuity_error, edge_vars)
+            # v2模式：连续性约束A矩阵已包含辅助变量列（通过扩展edge_vars），无需额外处理
             self.contin_constraints.append(LinearEqualityConstraint(
-                DecomposeLinearExpressions(path_continuity_error, edge_vars),
-                np.zeros(self.dimension)))
+                path_A, np.zeros(self.dimension)))
 
             # 时间轨迹的连续性约束（确保时间参数化连续）
             u_time_deriv = self.u_h_trajectory.MakeDerivative(deriv)
             v_time_deriv = v_h_trajectory.MakeDerivative(deriv)
             time_continuity_error = v_time_deriv.control_points()[0] - u_time_deriv.control_points()[-1]
+            time_A = DecomposeLinearExpressions(time_continuity_error, edge_vars)
             self.contin_constraints.append(LinearEqualityConstraint(
-                DecomposeLinearExpressions(time_continuity_error, edge_vars), 0.0))
+                time_A, 0.0))
+
+        # v2模式：添加辅助变量连续性约束（σ_u = σ_v, τ_u = τ_v）
+        # 这确保辅助变量在边之间连续，同时给辅助变量在约束中提供非零系数
+        # 解决GCS透视变换零系数导致的变量空间退化问题（B6根因）
+        if self._vertex_extended:
+            # edge_vars布局: [u空间(12), u时间(6), u_σ, u_τ, v空间(12), v时间(6), v_σ, v_τ]
+            # 辅助变量索引
+            u_sigma_idx = self.dimension * (order + 1) + (order + 1)  # u空间 + u时间
+            u_tau_idx = u_sigma_idx + 1
+            v_sigma_idx = u_tau_idx + 1 + self.dimension * (order + 1) + (order + 1)  # u全部 + v空间 + v时间
+            v_tau_idx = v_sigma_idx + 1
+            num_edge_vars = len(edge_vars)
+
+            # σ_u = σ_v 连续性约束
+            A_sigma_cont = np.zeros((1, num_edge_vars))
+            A_sigma_cont[0, u_sigma_idx] = -1.0
+            A_sigma_cont[0, v_sigma_idx] = 1.0
+            self.contin_constraints.append(LinearEqualityConstraint(
+                A_sigma_cont, np.zeros(1)))
+
+            # τ_u = τ_v 连续性约束
+            A_tau_cont = np.zeros((1, num_edge_vars))
+            A_tau_cont[0, u_tau_idx] = -1.0
+            A_tau_cont[0, v_tau_idx] = 1.0
+            self.contin_constraints.append(LinearEqualityConstraint(
+                A_tau_cont, np.zeros(1)))
 
         # 存储导数约束和边成本
         self.deriv_constraints = []           # 仅速度约束
         self.curvature_constraints = []       # 仅曲率约束
         self._curvature_constraint_bindings = []  # (edge, binding) 对
+        self.curvature_constraints_v2 = None  # v2曲率约束结果
+        self._curvature_v2_bindings = []      # v2 (edge, binding, type) 三元组
+        self._curvature_v2_added = False      # v2曲率约束幂等性标记
         self.edge_costs = []
+        self._aux_reg_added = False           # 辅助变量正则化已添加标记
 
         # 添加边到图中并应用约束
         if edges is None:
@@ -245,6 +313,15 @@ class BezierGCS(BaseGCS):
             for c_con in self.contin_constraints:
                 edge.AddConstraint(Binding[Constraint](
                         c_con, np.append(u.x(), v.x())))
+
+    @property
+    def aux_dim(self):
+        """辅助变量维度（v2模式为2，v1模式为0）
+
+        v2模式下顶点凸集扩展了σ_e和τ_e两个辅助变量维度，
+        所有涉及顶点变量索引的操作需偏移此值。
+        """
+        return 2 if self._vertex_extended else 0
 
     def addTimeCost(self, weight):
         """
@@ -982,6 +1059,88 @@ class BezierGCS(BaseGCS):
                 )
                 self._curvature_constraint_bindings.append((edge, binding))
 
+    def addCurvatureHardConstraintV2(
+        self,
+        max_curvature: float,
+        heading_directions=None,
+        boundary_edge_ids=None,
+        sigma_min="auto",
+    ):
+        """添加曲率硬约束v2：旋转二阶锥 + 线性速度下界
+
+        与v1的区别：
+        - v1: ‖Q_j‖ ≤ κ_max · ρ_min²  (全局常数阈值)
+        - v2: ‖Q_j‖ ≤ κ_max · σ_e²    (逐边变量阈值，由局部速度决定)
+
+        保守性改善：消除 (v_max/v_min)² 因子，保守性降低1~2个数量级
+
+        约束体系：
+        - A1: q_i · d_θ ≥ σ_e          (线性速度下界, n+1个/边)
+        - A2: τ_e · 1 ≥ σ_e²           (旋转二阶锥, 1个/边)
+        - B:  κ_max · τ_e ≥ ‖Q_j‖_2   (Lorentz锥, n-1个/边)
+        - C:  σ_e ≥ σ_min              (下界保证, 1个/边)
+
+        前提: P1~P6 (见设计报告§1)
+        求解器: MOSEK/SCS/Clarabel (Gurobi不支持旋转锥)
+
+        Args:
+            max_curvature: 最大允许曲率 κ_max (1/m)，必须为正数
+            heading_directions: 逐边航向角方向映射 {edge_id: np.array([cos_θ, sin_θ])}
+                若为None，从航向角约束自动提取
+            boundary_edge_ids: 边界边ID集合，这些边不应用曲率硬约束
+            sigma_min: σ_e的最小下界，"auto"自动推导，或用户显式指定正数
+
+        Returns:
+            CurvatureV2Result: 包含所有约束和binding的命名元组
+
+        Raises:
+            ValueError: 如果 max_curvature <= 0 或 sigma_min <= 0
+            RuntimeError: 如果求解器不支持旋转二阶锥
+
+        Note:
+            - 此约束是凸约束（SOCP），保持优化问题的凸性
+            - 需要MOSEK/SCS/Clarabel求解器
+            - 无需 min_velocity 和 h_bar_prime 参数（σ_e是优化变量）
+            - 无需 h_bar_prime 迭代修正
+            - 可行域严格包含v1的可行域
+        """
+        from ackermann_gcs_pkg.curvature_constraint_v2 import (
+            CurvatureConstraintCoordinator,
+            InvalidParameterError,
+        )
+
+        # 幂等性保护
+        if self._curvature_v2_added:
+            import logging
+            logging.getLogger(__name__).warning(
+                "[CURVATURE_V2] v2曲率约束已添加，跳过重复调用"
+            )
+            return self.curvature_constraints_v2
+
+        # 构建配置对象
+        config = type('CurvatureV2Config', (), {
+            'max_curvature': max_curvature,
+            'curvature_constraint_version': 'v2',
+            'enable_curvature_hard_constraint': True,
+            'heading_directions': heading_directions,
+            'boundary_edge_ids': boundary_edge_ids or set(),
+            'sigma_min': sigma_min,
+            'min_velocity': 1.0,  # v2不需要，但回退v1时使用
+            'h_bar_prime': None,
+            'h_bar_prime_safety_factor': 0.7,
+        })()
+
+        # 使用协调器添加约束
+        coordinator = CurvatureConstraintCoordinator(self)
+        result = coordinator.add_curvature_constraint(config)
+
+        if result is not None:
+            self.curvature_constraints_v2 = result
+            self._curvature_v2_bindings = result.all_bindings
+            self._curvature_v2_added = True
+
+        return result
+
     def removeCurvatureHardConstraints(self, verbose=False):
         """移除GCS图上所有已添加的曲率硬约束。
 
@@ -1098,32 +1257,20 @@ class BezierGCS(BaseGCS):
         Returns:
             tuple: (源点边列表, 目标点边列表)
         """
-        # 调用基类方法添加源点和目标点
-        source_edges, target_edges = super().addSourceTarget(source, target, edges)
+        # v2模式：source/target顶点维度必须与区域顶点一致，否则GCS空间流守恒
+        # 对扩展维度添加额外约束，与source/target边约束组合导致松弛不可行
+        if self._vertex_extended:
+            source_edges, target_edges = self._addSourceTargetExtended(source, target, edges)
+        else:
+            source_edges, target_edges = super().addSourceTarget(source, target, edges)
 
         # 检查并修复源点连接 
         if not source_edges:
             print(f"WARNING: No source edges created. Source position: {source}")
-            # # 手动检查源点是否在各区域内部
-            # for vertex in self.gcs.Vertices():
-            #     if vertex != self.source and vertex != self.target:
-                    # # 检查源点是否在顶点区域内
-                    # if self._isSourceInVertexRegion(source, vertex):
-                    #     print(f"Manually adding edge from source to {vertex.name()}")
-                    #     edge = self.gcs.AddEdge(self.source, vertex, f"(source, {vertex.name()})")
-                    #     source_edges.append(edge)
         
             # 同样检查目标点连接
         if not target_edges:
             print(f"WARNING: No target edges created. Target position: {target}")
-            # # 手动检查目标点是否在各区域内部
-            # for vertex in self.gcs.Vertices():
-            #     if vertex != self.source and vertex != self.target:
-                    # # 检查目标点是否在顶点区域内
-                    # if self._isSourceInVertexRegion(target, vertex):
-                    #     print(f"Manually adding edge from target to {vertex.name()}")
-                    #     edge = self.gcs.AddEdge(self.source, vertex, f"(source, {vertex.name()})")
-                    #     source_edges.append(edge)
 
         # 如果指定了边界速度条件
         if velocity is not None:
@@ -1187,14 +1334,16 @@ class BezierGCS(BaseGCS):
                 edge.AddConstraint(Binding[Constraint](initial_time_deriv_con, edge.xv()))
 
             # 源点的时间起点为0
-            edge.AddConstraint(edge.xv()[-(self.order + 1)] == 0.)
+            # v2模式下xv末尾有aux_dim个辅助变量，索引需偏移
+            edge.AddConstraint(edge.xv()[-(self.order + 1 + self.aux_dim)] == 0.)
 
         # 为目标点边添加约束
         for edge in target_edges:    
             # 目标点边：最后一个顶点和目标点在空间上重合
+            # v2模式下xu末尾有aux_dim个辅助变量，索引需偏移
             for jj in range(self.dimension):
                 edge.AddConstraint(
-                    edge.xu()[-(self.dimension + self.order + 1) + jj] == edge.xv()[jj])
+                    edge.xu()[-(self.dimension + self.order + 1 + self.aux_dim) + jj] == edge.xv()[jj])
 
             # 添加速度约束（如果指定）
             if velocity is not None:
@@ -1229,7 +1378,112 @@ class BezierGCS(BaseGCS):
                 )
                 self._curvature_constraint_bindings.append((edge, binding))
 
+        # v2模式：自动添加辅助变量(σ_e, τ_e)正则化成本
+        # 解决GCS透视变换零系数问题：σ和τ在路径/时间连续性约束和成本中
+        # 系数全为零，透视变换后变量空间退化导致不可行
+        # 通过添加微小线性成本使σ和τ在成本函数中有非零系数
+        if self._vertex_extended and not self._aux_reg_added:
+            self._add_aux_variable_regularization()
+            self._aux_reg_added = True
+
         return source_edges, target_edges
+
+    def _addSourceTargetExtended(self, source, target, edges=None):
+        """v2模式：添加与区域顶点同维的source/target顶点
+
+        B6根因修复：GCS空间流守恒对每个顶点维度添加等式约束。
+        当source/target为2D Point而区域顶点为20D时，流守恒对扩展维度
+        添加的约束与source/target边约束组合导致松弛不可行。
+        解决方案：将source/target扩展为与区域顶点同维的HPolyhedron。
+
+        source/target集合 = Point_approx^6 × time_scaling_set × _free_R2
+        其中Point_approx是源/目标点的极小HPolyhedron近似。
+        """
+        # 如果之前已经添加过源点或目标点，则先移除它们
+        if self.source is not None or self.target is not None:
+            self.gcs.RemoveVertex(self.source)
+            self.gcs.RemoveVertex(self.target)
+
+        assert len(source) == self.dimension
+        assert len(target) == self.dimension
+
+        vertices = self.gcs.Vertices()
+
+        # 构建源/目标点的极小HPolyhedron近似（Point不支持CartesianPower）
+        eps = 1e-6
+        def make_point_hpoly(p):
+            A = np.vstack([np.eye(self.dimension), -np.eye(self.dimension)])
+            b = np.concatenate([p + eps, -p + eps])
+            return HPolyhedron(A, b)
+
+        source_point = make_point_hpoly(source)
+        target_point = make_point_hpoly(target)
+
+        # 构建与区域顶点同维的source/target集合
+        # 布局: [空间控制点^6 | 时间控制点^6 | 辅助变量(σ,τ)]
+        source_set = source_point.CartesianPower(self.order + 1) \
+                        .CartesianProduct(self.time_scaling_set) \
+                        .CartesianProduct(self._free_R2)
+        target_set = target_point.CartesianPower(self.order + 1) \
+                        .CartesianProduct(self.time_scaling_set) \
+                        .CartesianProduct(self._free_R2)
+
+        self.source = self.gcs.AddVertex(source_set, "source")
+        self.target = self.gcs.AddVertex(target_set, "target")
+
+        # 添加边
+        if edges is None:
+            edges = self.findStartGoalEdges(source, target)
+
+        if not (len(edges[0]) > 0):
+            raise ValueError('Source vertex is not connected.')
+        if not (len(edges[1]) > 0):
+            raise ValueError('Target vertex is not connected.')
+
+        source_edges = []
+        target_edges = []
+        for ii in edges[0]:
+            u = vertices[ii]
+            edge = self.gcs.AddEdge(self.source, u, f"(source, {u.name()})")
+            source_edges.append(edge)
+        for ii in edges[1]:
+            u = vertices[ii]
+            edge = self.gcs.AddEdge(u, self.target, f"({u.name()}, target)")
+            target_edges.append(edge)
+
+        return source_edges, target_edges
+
+    def _add_aux_variable_regularization(self, weight=1e-4):
+        """v2模式：为辅助变量(σ_e, τ_e)添加正则化线性成本
+
+        解决GCS透视变换零系数问题（B6根因）：
+        σ和τ在路径/时间连续性约束和现有成本中系数全为零，
+        透视变换后变量空间退化导致GCS不可行。
+        通过添加微小线性成本使σ和τ在成本函数中有非零系数。
+
+        Args:
+            weight: 正则化权重，默认1e-4（足够小不影响优化结果，
+                    但足够大使GCS透视变换不退化）
+        """
+        num_vars = len(self.u_vars)
+        sigma_idx = num_vars - 2  # σ_e是倒数第2个变量
+        tau_idx = num_vars - 1    # τ_e是最后1个变量
+
+        for edge in self.gcs.Edges():
+            if edge.u() == self.source:
+                continue
+            xu = edge.xu()
+            # σ_e线性成本
+            A_sigma = np.zeros(len(xu))
+            A_sigma[sigma_idx] = weight
+            sigma_cost = LinearCost(A_sigma, 0.0)
+            edge.AddCost(Binding[Cost](sigma_cost, xu))
+
+            # τ_e线性成本
+            A_tau = np.zeros(len(xu))
+            A_tau[tau_idx] = weight
+            tau_cost = LinearCost(A_tau, 0.0)
+            edge.AddCost(Binding[Cost](tau_cost, xu))
 
     def _build_trajectory_from_path(self, path_edges, result):
         """从路径边列表和求解结果构建 BezierTrajectory。
@@ -1249,20 +1503,31 @@ class BezierGCS(BaseGCS):
             for edge in path_edges:
                 if edge.v() == self.target:
                     knots = np.concatenate((knots, [knots[-1]]))
-                    path_control_points.append(result.GetSolution(edge.xv()))
+                    # target边的xv是target顶点变量，可能包含辅助变量
+                    # 只取前dimension个元素作为空间位置
+                    xv_sol = result.GetSolution(edge.xv())
+                    path_control_points.append(xv_sol[:self.dimension])
+                    # F6: 取最后时间控制点
+                    # v2模式下xu末尾有aux_dim个辅助变量，需偏移
                     time_control_points.append(
-                        np.array([result.GetSolution(edge.xu())[-1]]))
+                        np.array([result.GetSolution(edge.xu())[-(1 + self.aux_dim)]]))
                     break
 
                 edge_time = knots[-1] + 1.
                 knots = np.concatenate(
                     (knots, np.full(self.order, edge_time)))
 
+                # F4: 空间控制点切片（排除末尾的时间+辅助变量）
                 edge_path_points = np.reshape(
-                    result.GetSolution(edge.xv())[:-(self.order + 1)],
+                    result.GetSolution(edge.xv())[:-(self.order + 1 + self.aux_dim)],
                     (self.dimension, self.order + 1), "F")
-                edge_time_points = result.GetSolution(
-                    edge.xv())[-(self.order + 1):]
+                # F5: 时间控制点切片（排除末尾的辅助变量）
+                if self.aux_dim > 0:
+                    edge_time_points = result.GetSolution(
+                        edge.xv())[-(self.order + 1 + self.aux_dim):-self.aux_dim]
+                else:
+                    edge_time_points = result.GetSolution(
+                        edge.xv())[-(self.order + 1):]
 
                 for ii in range(self.order):
                     path_control_points.append(edge_path_points[:, ii])
