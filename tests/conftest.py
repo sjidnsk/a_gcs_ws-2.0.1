@@ -14,6 +14,9 @@ src_dir = os.path.join(project_root, 'src')
 if '' in sys.path:
     sys.path.remove('')
 
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 if src_dir not in sys.path:
     sys.path.insert(0, src_dir)
 

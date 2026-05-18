@@ -46,10 +46,10 @@ class GCSOptimizer:
         self.gcs_continuity = self.config.gcs_continuity
         self.time_weight = self.config.gcs_time_weight
         self.path_weight = self.config.gcs_path_length_weight
-        self.has_energy_cost = hasattr(self.config, '_gcs_energy_weight') and self.config._gcs_energy_weight > 0
-        self.energy_weight = getattr(self.config, '_gcs_energy_weight', 0.0)
-        self.zero_velocity_at_boundaries = getattr(self.config, 'gcs_zero_velocity_at_boundaries', True)
-        self.min_time_derivative = getattr(self.config, 'gcs_min_time_derivative', 1.0)
+        self.energy_weight = self.config.gcs_energy_weight
+        self.has_energy_cost = self.energy_weight > 0
+        self.zero_velocity_at_boundaries = self.config.gcs_zero_velocity_at_boundaries
+        self.min_time_derivative = self.config.gcs_min_time_derivative
     
     def _preallocate_arrays(self):
         """预分配常用数组，减少运行时内存分配"""
@@ -156,10 +156,10 @@ class GCSOptimizer:
                 return False
 
             # 获取车辆参数
-            wheelbase = getattr(self.config, 'ackermann_wheelbase', 2.5)
-            max_steering_angle = getattr(self.config, 'ackermann_delta_max', np.deg2rad(85))
-            v_max = getattr(self.config, 'ackermann_v_max', 10.0)
-            max_acceleration = getattr(self.config, 'ackermann_max_acceleration', 5.0)
+            wheelbase = self.config.ackermann_wheelbase
+            max_steering_angle = self.config.ackermann_delta_max
+            v_max = self.config.ackermann_v_max
+            max_acceleration = self.config.ackermann_max_acceleration
 
             # 创建车辆参数
             vehicle_params = VehicleParams(
@@ -194,25 +194,25 @@ class GCSOptimizer:
             )
 
             # 设置成本权重
-            curvature_mode = getattr(self.config, 'gcs_curvature_constraint_mode', 'none')
+            curvature_mode = self.config.gcs_curvature_constraint_mode
             constraints = TrajectoryConstraints(
                 max_velocity=vehicle_params.max_velocity,
                 max_acceleration=vehicle_params.max_acceleration,
                 max_curvature=vehicle_params.max_curvature,
                 workspace_regions=regions,
                 enable_curvature_hard_constraint=(curvature_mode == "hard"),
-                min_velocity=getattr(self.config, 'ackermann_v_min', 1.58),
+                min_velocity=self.config.ackermann_v_min,
                 curvature_constraint_mode=curvature_mode,
             )
 
             cost_weights = {
                 "time": self.time_weight,
                 "path_length": self.path_weight,
-                "energy": getattr(self.config, '_gcs_energy_weight', 0.01),
+                "energy": self.config.gcs_energy_weight,
                 # 曲率惩罚成本（可选）
-                "curvature_squared": getattr(self.config, 'curvature_squared_weight', 0.0),
-                "curvature_derivative": getattr(self.config, 'curvature_derivative_weight', 0.0),
-                "curvature_peak": getattr(self.config, 'curvature_peak_weight', 0.0)
+                "curvature_squared": self.config.curvature_squared_weight,
+                "curvature_derivative": self.config.curvature_derivative_weight,
+                "curvature_peak": self.config.curvature_peak_weight
             }
 
             # 执行轨迹规划

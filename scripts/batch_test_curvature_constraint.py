@@ -1,5 +1,5 @@
 """
-批量测试曲率硬约束规划成功率
+批量测试曲率约束规划成功率
 运行10次，统计成功率，不输出可视化
 """
 
@@ -8,6 +8,7 @@ import sys
 import time
 import io
 import numpy as np
+import argparse
 
 # 路径设置
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -25,22 +26,15 @@ import matplotlib
 matplotlib.use('Agg')  # 非交互式后端，不显示窗口
 
 from scripts.hybrid_astar_gcs_planner import (
-    SCENARIO_CONFIGS, convert_iris_to_hpolyhedron,
-    create_endpoint_state, DEFAULT_VEHICLE_PARAMS,
+    convert_iris_to_hpolyhedron,
+    create_endpoint_state,
     plan_path, create_test_map
 )
 from C_space_pkg.se2 import SE2ConfigurationSpace
-from path_planner.scripts.hybrid_astar_gcs_planner import HybridAStarGCSPlanner
-from path_planner.scripts.planner_support import PlannerConfig
-from ackermann_gcs_pkg.ackermann_gcs_planner import AckermannGCSPlanner
-from ackermann_gcs_pkg.ackermann_data_structures import (
-    BezierConfig, TrajectoryConstraints
-)
-
-CURVATURE_CONSTRAINT_MODE = "hard"  # "none", "hard", or "direction_cone"
+from config.project import ProjectConfig, load_project_config
 
 
-def run_single_test(run_id: int, scenario: str = 'basic'):
+def run_single_test(run_id: int, scenario: str, project_config: ProjectConfig):
     """运行单次测试，返回结果字典"""
     result = {
         'run_id': run_id,
@@ -56,7 +50,7 @@ def run_single_test(run_id: int, scenario: str = 'basic'):
     }
 
     try:
-        config = SCENARIO_CONFIGS[scenario]
+        config = project_config.scenario_dict(scenario)
         start = config['start']
         goal = config['goal']
 
@@ -66,18 +60,19 @@ def run_single_test(run_id: int, scenario: str = 'basic'):
         )
 
         # 2. A*路径规划
-        astar_path = plan_path(c_space, start, goal)
+        astar_path = plan_path(c_space, start, goal, project_config)
         if not astar_path:
             result['error'] = 'A* path planning failed'
             return result
 
         # 3. IRIS分解
-        planner_config = PlannerConfig(
-            use_iris=True,
-            corridor_width=config.get('corridor_width', 2.0),
+        from path_planner.scripts.hybrid_astar_gcs_planner import HybridAStarGCSPlanner
+
+        planner_config = project_config.planner_config(
+            scenario,
             enable_visualization=False,
             save_visualization=False,
-            enable_gcs_optimization=False
+            enable_gcs_optimization=False,
         )
         planner = HybridAStarGCSPlanner(c_space, planner_config)
         iris_planner_result = planner.process(astar_path)
@@ -91,23 +86,16 @@ def run_single_test(run_id: int, scenario: str = 'basic'):
         workspace_regions = convert_iris_to_hpolyhedron(iris_result.regions)
 
         # 4. AckermannGCS规划（启用曲率硬约束）
-        vehicle_params = DEFAULT_VEHICLE_PARAMS
+        vehicle_params = project_config.vehicle_params()
         source = create_endpoint_state(start[:2], start[2])
         target = create_endpoint_state(goal[:2], goal[2])
+        constraints = project_config.trajectory_constraints(workspace_regions)
 
-        constraints = TrajectoryConstraints(
-            max_velocity=vehicle_params.max_velocity,
-            max_acceleration=vehicle_params.max_acceleration,
-            max_curvature=vehicle_params.max_curvature,
-            workspace_regions=workspace_regions,
-            enable_curvature_hard_constraint=(CURVATURE_CONSTRAINT_MODE == "hard"),
-            min_velocity=2.0,
-            curvature_constraint_mode=CURVATURE_CONSTRAINT_MODE,
-        )
+        from ackermann_gcs_pkg.ackermann_gcs_planner import AckermannGCSPlanner
 
         ackermann_planner = AckermannGCSPlanner(
             vehicle_params=vehicle_params,
-            bezier_config=BezierConfig(order=5, continuity=1)
+            bezier_config=project_config.bezier_config()
         )
 
         t_start = time.time()
@@ -116,11 +104,7 @@ def run_single_test(run_id: int, scenario: str = 'basic'):
             target=target,
             workspace_regions=workspace_regions,
             constraints=constraints,
-            cost_weights={
-                "time": 3.0,
-                "path_length": 1.5,
-                "energy": 3.0,
-            },
+            cost_weights=project_config.cost_weights(),
             reference_path=astar_path,
             verbose=False
         )
@@ -130,7 +114,9 @@ def run_single_test(run_id: int, scenario: str = 'basic'):
             result['error'] = 'No trajectory returned'
             return result
 
-        result['success'] = True
+        result['success'] = bool(planning_result.success)
+        if not planning_result.success:
+            result['error'] = planning_result.error_message or 'Trajectory infeasible'
 
         # 提取可行性信息
         report = planning_result.trajectory_report
@@ -154,11 +140,39 @@ def run_single_test(run_id: int, scenario: str = 'basic'):
 
 
 def main():
-    num_runs = 10
-    scenario = 'basic'
+    parser = argparse.ArgumentParser(
+        description="批量测试曲率约束规划成功率",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument("scenario", nargs="?", default=None, help="测试场景名称")
+    parser.add_argument("--num-runs", type=int, default=None, help="运行次数")
+    parser.add_argument("--config", default="config/experiments/curvature_direction_cone.yaml", help="YAML配置文件路径")
+    parser.add_argument(
+        "--set",
+        dest="overrides",
+        action="append",
+        default=[],
+        help="覆盖配置项，例如 --set batch.num_runs=3",
+    )
+    parser.add_argument("--dump-config", default=None, help="导出合并后的配置到指定YAML文件")
+    args = parser.parse_args()
+
+    project_config = load_project_config(
+        args.config,
+        args.overrides,
+        export_resolved_path=args.dump_config,
+    )
+    num_runs = args.num_runs if args.num_runs is not None else project_config.batch.num_runs
+    scenario = args.scenario or project_config.batch.scenario
+    curvature_mode = project_config.ackermann.constraints.curvature_constraint_mode
 
     print("=" * 70)
-    print(f"批量测试曲率硬约束规划 - 场景: {scenario}, 次数: {num_runs}")
+    print(
+        f"批量测试曲率约束规划 - 场景: {scenario}, "
+        f"模式: {curvature_mode}, 次数: {num_runs}"
+    )
+    if curvature_mode == "direction_cone":
+        print(f"方向锥参数预设: {project_config.ackermann.direction_cone_profile}")
     print("=" * 70)
 
     results = []
@@ -172,14 +186,14 @@ def main():
             f"\r  [{bar}] {i+1}/{num_runs} ({pct:.0f}%)")
         sys.stdout.flush()
 
-        # 抑制每次规划的 stdout/stderr 输出
         old_stdout = sys.stdout
         old_stderr = sys.stderr
-        sys.stdout = io.StringIO()
-        sys.stderr = io.StringIO()
+        if project_config.batch.quiet_each_run:
+            sys.stdout = io.StringIO()
+            sys.stderr = io.StringIO()
         try:
             t0 = time.time()
-            result = run_single_test(i + 1, scenario)
+            result = run_single_test(i + 1, scenario, project_config)
             elapsed = time.time() - t0
         finally:
             sys.stdout = old_stdout
@@ -209,6 +223,7 @@ def main():
         curv_violations = [r['curvature_violation'] for r in successes]
         vel_violations = [r['velocity_violation'] for r in successes]
         acc_violations = [r['acceleration_violation'] for r in successes]
+        workspace_violations = [r['workspace_violation'] for r in successes]
 
         print(f"\n--- 求解时间 (s) ---")
         print(f"  均值: {np.mean(solve_times):.3f}")
@@ -221,7 +236,7 @@ def main():
         print(f"  标准差: {np.std(max_curvatures):.6f}")
         print(f"  最小: {np.min(max_curvatures):.6f}")
         print(f"  最大: {np.max(max_curvatures):.6f}")
-        print(f"  κ_max限制: {DEFAULT_VEHICLE_PARAMS.max_curvature:.6f}")
+        print(f"  κ_max限制: {project_config.vehicle_params().max_curvature:.6f}")
 
         print(f"\n--- 曲率违反量 ---")
         print(f"  均值: {np.mean(curv_violations):.6f}")
@@ -238,6 +253,11 @@ def main():
         print(f"  最大: {np.max(acc_violations):.6f}")
         print(f"  零违反次数: {sum(1 for v in acc_violations if v < 1e-4)}/{len(successes)}")
 
+        print(f"\n--- 工作空间违反量 ---")
+        print(f"  均值: {np.mean(workspace_violations):.6f}")
+        print(f"  最大: {np.max(workspace_violations):.6f}")
+        print(f"  零违反次数: {sum(1 for v in workspace_violations if v < 1e-4)}/{len(successes)}")
+
         # 逐次详细结果
         print(f"\n--- 逐次详细结果 ---")
         for r in successes:
@@ -246,7 +266,8 @@ def main():
                   f"κ_max={r['max_curvature']:.4f} | "
                   f"κ_viol={r['curvature_violation']:.4f} | "
                   f"v_viol={r['velocity_violation']:.4f} | "
-                  f"a_viol={r['acceleration_violation']:.4f}")
+                  f"a_viol={r['acceleration_violation']:.4f} | "
+                  f"ws_viol={r['workspace_violation']:.4f}")
 
     errors = [r for r in results if r['error']]
     if errors:

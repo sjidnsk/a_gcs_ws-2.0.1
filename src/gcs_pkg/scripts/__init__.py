@@ -63,18 +63,10 @@ from config.gcs import (
     OptimizationPriority,
     CostWeights,
     CostConfigurator,
-    CostOptimizer,
-    LunarRoverGCSConfig,
     get_lunar_standard_config,
     get_lunar_high_risk_config,
     get_lunar_emergency_config,
     get_lunar_complex_config,
-    get_standard_lunar_config,
-    get_high_risk_lunar_config,
-    get_emergency_lunar_config,
-    get_complex_terrain_config,
-    apply_lunar_config_to_gcs,
-    get_gcs_solve_options,
 )
 
 # 导入工具函数
@@ -110,19 +102,10 @@ __all__ = [
     'OptimizationPriority',
     'CostWeights',
     'CostConfigurator',
-    'CostOptimizer',
     'get_lunar_standard_config',
     'get_lunar_high_risk_config',
     'get_lunar_emergency_config',
     'get_lunar_complex_config',
-    # 月面配置
-    'LunarRoverGCSConfig',
-    'get_standard_lunar_config',
-    'get_high_risk_lunar_config',
-    'get_emergency_lunar_config',
-    'get_complex_terrain_config',
-    'apply_lunar_config_to_gcs',
-    'get_gcs_solve_options',
     # 工具函数
     'removeRedundancies',
 ]

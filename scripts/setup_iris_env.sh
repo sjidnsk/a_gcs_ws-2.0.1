@@ -14,7 +14,7 @@ set -e  # 遇到错误立即退出
 # 配置
 ENV_NAME="${1:-iris-py3.12}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-YAML_FILE="${SCRIPT_DIR}/../config/iris_env.yaml"
+YAML_FILE="${SCRIPT_DIR}/../config/environments/iris_env.yaml"
 
 echo "============================================================"
 echo "iris-py3.12环境部署脚本 (Shell版本)"
@@ -38,7 +38,7 @@ fi
 # 检查YAML文件是否存在
 if [ ! -f "${YAML_FILE}" ]; then
     echo "✗ 配置文件不存在: ${YAML_FILE}"
-    echo "请确保 iris_env.yaml 文件存在于 config/ 目录"
+    echo "请确保 iris_env.yaml 文件存在于 config/environments/ 目录"
     exit 1
 fi
 

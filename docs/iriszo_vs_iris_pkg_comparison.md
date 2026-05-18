@@ -367,7 +367,6 @@ visualize_region_only()
 ```python
 # 配置
 IrisNpConfig
-IrisNpConfigOptimized
 get_high_safety_config()
 get_fast_processing_config()
 get_balanced_config()
@@ -759,7 +758,7 @@ class IrisZoConfig:
 #### IrisPkg 配置参数
 
 ```python
-class IrisNpConfigOptimized:
+class IrisNpConfig:
     # 迭代控制参数
     iteration_limit: int
     termination_threshold: float

@@ -18,12 +18,8 @@ from .iris_np_config import (
     DEFAULT_NUM_WORKERS,
 )
 
-from .iris_np_config_optimized import IrisNpConfigOptimized
-
-
 __all__ = [
     'IrisNpConfig',
-    'IrisNpConfigOptimized',
     'get_high_safety_config',
     'get_fast_processing_config',
     'get_balanced_config',

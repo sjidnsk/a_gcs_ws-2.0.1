@@ -10,13 +10,8 @@ from .ackermann_config import (
     ControlPointData,
 )
 
-from .core_config import (
-    PlotConfig,
-)
-
 __all__ = [
     'VisualizationConfig',
     'ControlPointConfig',
     'ControlPointData',
-    'PlotConfig',
 ]

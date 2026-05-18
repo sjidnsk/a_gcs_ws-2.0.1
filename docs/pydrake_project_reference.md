@@ -16,7 +16,7 @@ Important environment assumption: the runnable target is Ubuntu with Conda env `
 - PyDrake math / `BsplineBasis`: https://drake.mit.edu/pydrake/pydrake.math.html
 - Using Drake from Python: https://drake.mit.edu/python_bindings.html
 
-The online docs track the current Drake documentation; the project currently pins Drake `1.51.1` in `config/iris_env.yaml`. If an API is questionable, verify in the Ubuntu env with:
+The online docs track the current Drake documentation; the project currently pins Drake `1.51.1` in `config/environments/iris_env.yaml`. If an API is questionable, verify in the Ubuntu env with:
 
 ```bash
 python - <<'PY'

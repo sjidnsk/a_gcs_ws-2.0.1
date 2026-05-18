@@ -8,6 +8,8 @@ import os
 import sys
 import numpy as np
 from typing import List, Tuple, Optional
+import argparse
+from functools import lru_cache
 
 try:
     from pydrake.geometry.optimization import HPolyhedron
@@ -48,168 +50,19 @@ if ackermann_pkg_dir in sys.path:
 sys.path.insert(3, ackermann_pkg_dir)
 
 from C_space_pkg.se2 import SE2ConfigurationSpace, create_rectangle_robot
-from A_pkg.A_star_fast_optimized import FastSE2AStarPlanner, PlannerConfig as AStarPlannerConfig
-from path_planner.scripts.hybrid_astar_gcs_planner import HybridAStarGCSPlanner
-from path_planner.scripts.planner_support import PlannerConfig
-
-# 导入 ackermann_gcs_pkg 模块
-from ackermann_gcs_pkg.ackermann_gcs_planner import AckermannGCSPlanner
+from A_pkg.A_star_fast_optimized import FastSE2AStarPlanner
 from ackermann_gcs_pkg.ackermann_data_structures import (
     VehicleParams,
     EndpointState,
-    BezierConfig,
-    TrajectoryConstraints,
     PlanningResult
 )
-
-# 导入可视化模块
-from visualization.ackermann import visualize_ackermann_gcs_enhanced
+from config.project import ProjectConfig, VALID_PLANNER_MODES, load_project_config
 
 
-# ==================== 阿克曼GCS配置 ====================
-
-# 默认车辆参数
-DEFAULT_VEHICLE_PARAMS = VehicleParams(
-    wheelbase=2.5,                    # 轴距（米）
-    max_steering_angle=np.deg2rad(85),  # 最大转向角 85°（弧度）
-    max_velocity=10.0,                # 最大速度（米/秒）
-    max_acceleration=8.0              # 最大加速度（米/秒²）
-)
-CURVATURE_CONSTRAINT_MODE = "direction_cone"  # "none", "hard", or "direction_cone"
-DIRECTION_CONE_PROFILE = "selective"  # "default", "loose", or "selective"
-
-
-def get_direction_cone_profile(profile: str) -> dict:
-    """返回 direction_cone 参数预设。"""
-    loose_profile = {
-        "direction_cone_alpha": 0.45,
-        "direction_cone_beta": 0.55,
-        "direction_cone_gamma": 0.45,
-        "direction_cone_theta_min_deg": 45.0,
-        "direction_cone_theta_abs_max_deg": 80.0,
-        "direction_cone_theta_margin_deg": 25.0,
-        "direction_cone_width_mu": 3.0,
-        "direction_cone_rho_warning_ratio": 0.10,
-    }
-    profiles = {
-        "default": {},
-        # 更宽的方向锥 + 更小的前进投影下界，用于测试轨迹不必紧贴 A* 切向。
-        "loose": loose_profile,
-        # 只对和参考方向一致、几何条件可信的边加 direction_cone。
-        "selective": {
-            **loose_profile,
-            "direction_cone_skip_risk_flags": (
-                "direction_mismatch",
-                "parallel_width_degenerate",
-                "parallel_width_small",
-                "path_projection_degenerate",
-                "overlap_infeasible",
-                "overlap_unavailable",
-                "theta_width_below_min",
-            ),
-        },
-    }
-    if profile not in profiles:
-        raise ValueError(
-            f"unknown direction cone profile {profile!r}; "
-            f"available: {', '.join(profiles)}"
-        )
-    return dict(profiles[profile])
-
-# 场景配置字典
-SCENARIO_CONFIGS = {
-    'basic': {
-        'map_size': 200,
-        'start': (18.0, 2.25, 2.5),
-        'goal': (18.0, 19.5, 0.1),
-        'corridor_width': 100.0
-    },
-    'minimal': {
-        'map_size': 100,
-        'start': (5.0, 5.0, 0.0),
-        'goal': (8.0, 5.0, 0.0),
-        'corridor_width': 5.0
-    },
-    'simple_straight': {
-        'map_size': 200,
-        'start': (5.0, 10.0, 0.0),
-        'goal': (15.0, 10.0, 0.0),
-        'corridor_width': 4.0
-    },
-    'gentle_turn': {
-        'map_size': 200,
-        'start': (5.0, 10.0, 0.0),
-        'goal': (15.0, 15.0, np.pi/6),
-        'corridor_width': 4.0
-    },
-    'sharp_turn': {
-        'map_size': 200,
-        'start': (5.0, 10.0, 0.0),
-        'goal': (15.0, 10.0, np.pi/3),
-        'corridor_width': 5.0
-    },
-    'corridor_passage': {
-        'map_size': 200,
-        'start': (5.0, 10.0, 0.0),
-        'goal': (25.0, 10.0, 0.0),
-        'corridor_width': 4.0
-    },
-    'slalom': {
-        'map_size': 250,
-        'start': (5.0, 12.5, 0.0),
-        'goal': (30.0, 12.8, 0.0),
-        'corridor_width': 4.0
-    },
-    'maze_navigation': {
-        'map_size': 300,
-        'start': (30.0, 30.0, 0.0),
-        'goal': (60.0, 60.0, np.pi/4),
-        'corridor_width': 4.0
-    },
-    'narrow': {
-        'map_size': 250,
-        'start': (1.5, 12.5, -np.pi/2),
-        'goal': (23.0, 13.0, np.pi/2),
-        'corridor_width': 100.0
-    },
-    'complex': {
-        'map_size': 500,
-        'start': (10.0, 10.0, 0.0),
-        'goal': (45.0, 45.0, np.pi/4),
-        'corridor_width': 2.0
-    },
-    'u_turn': {
-        'map_size': 200,
-        'start': (16.0, 7.0, 0.0),
-        'goal': (16.0, 9.5, np.pi),
-        'corridor_width': 2.5
-    },
-    's_curve': {
-        'map_size': 200,
-        'start': (10.0, 10.0, 0.0),
-        'goal': (14.0, 10.0, 0.0),
-        'corridor_width': 2.5
-    },
-    'dynamic': {
-        'map_size': 200,
-        'start': (4.0, 4.0, 0.0),
-        'goal': (14.0, 14.0, np.pi/2),
-        'corridor_width': 2.0
-    },
-    'multi_goal': {
-        'map_size': 200,
-        'start': (5.0, 10.0, 0.0),
-        'goal': (15.0, 10.0, 0.0),
-        'corridor_width': 2.5
-    },
-    'parking': {
-        'map_size': 200,
-        'start': (10.0, 13.0, 0.0),
-        'goal': (10.0, 5.0, 0.0),
-        'corridor_width': 2.0
-    }
-}
-
+@lru_cache(maxsize=1)
+def _default_project_config() -> ProjectConfig:
+    """Load the default YAML config lazily for programmatic callers."""
+    return load_project_config()
 
 # ==================== 阿克曼GCS辅助函数 ====================
 
@@ -322,6 +175,8 @@ def visualize_ackermann_trajectory(trajectory: BsplineTrajectory,
         vehicle_params: 车辆参数
         output_path: 输出路径
     """
+    from visualization.ackermann import visualize_ackermann_gcs_enhanced
+
     visualize_ackermann_gcs_enhanced(
         trajectory=trajectory,
         vehicle_params=vehicle_params,
@@ -338,7 +193,8 @@ def run_ackermann_gcs_test(scenario: str,
                           obstacle_map: np.ndarray,
                           start: Tuple,
                           goal: Tuple,
-                          corridor_width: float):
+                          corridor_width: float,
+                          project_config: Optional[ProjectConfig] = None):
     """
     运行阿克曼GCS测试
 
@@ -352,24 +208,28 @@ def run_ackermann_gcs_test(scenario: str,
     print(f"\n{'='*60}")
     print(f"测试场景: {scenario}, 模式: ackermann_gcs")
     print(f"{'='*60}")
+    project_config = project_config or _default_project_config()
 
     try:
+        from path_planner.scripts.hybrid_astar_gcs_planner import HybridAStarGCSPlanner
+        from ackermann_gcs_pkg.ackermann_gcs_planner import AckermannGCSPlanner
+
         # 步骤1：创建配置空间
         c_space = SE2ConfigurationSpace(obstacle_map, resolution=0.1)
 
         # 步骤2：A*路径规划（用于生成IRIS区域）
-        path = plan_path(c_space, start, goal)
+        path = plan_path(c_space, start, goal, project_config)
         if not path:
             raise ValueError("A*路径规划失败")
 
         # 步骤3：执行IRIS分解
-        config = PlannerConfig(
-            use_iris=True,
-            corridor_width=corridor_width,
+        config = project_config.planner_config(
+            scenario,
             enable_visualization=False,
             save_visualization=False,
-            enable_gcs_optimization=False  # 禁用GCS优化，只需要IRIS区域
+            enable_gcs_optimization=False,
         )
+        config.corridor_width = corridor_width
         planner = HybridAStarGCSPlanner(c_space, config)
         result = planner.process(path)
 
@@ -386,55 +246,38 @@ def run_ackermann_gcs_test(scenario: str,
             raise ValueError("IRIS区域转换失败")
 
         # 步骤5：配置车辆参数
-        vehicle_params = DEFAULT_VEHICLE_PARAMS
+        vehicle_params = project_config.vehicle_params()
 
         # 步骤6：创建起终点状态
         source = create_endpoint_state(start[:2], start[2])
         target = create_endpoint_state(goal[:2], goal[2])
         direction_cone_overrides = (
-            get_direction_cone_profile(DIRECTION_CONE_PROFILE)
-            if CURVATURE_CONSTRAINT_MODE == "direction_cone"
+            project_config.direction_cone_overrides()
+            if project_config.ackermann.constraints.curvature_constraint_mode == "direction_cone"
             else {}
         )
         if direction_cone_overrides:
-            print(f"使用 direction_cone 参数预设: {DIRECTION_CONE_PROFILE}")
+            print(f"使用 direction_cone 参数预设: {project_config.ackermann.direction_cone_profile}")
             for key, value in direction_cone_overrides.items():
                 print(f"  {key}: {value}")
 
         # 步骤7：初始化AckermannGCSPlanner
         ackermann_planner = AckermannGCSPlanner(
             vehicle_params=vehicle_params,
-            bezier_config=BezierConfig(order=5, continuity=1)
+            bezier_config=project_config.bezier_config()
         )
 
         # 步骤8：执行轨迹规划
-        constraints = TrajectoryConstraints(
-            max_velocity=vehicle_params.max_velocity,
-            max_acceleration=vehicle_params.max_acceleration,
-            max_curvature=vehicle_params.max_curvature,
-            workspace_regions=workspace_regions,
-            enable_curvature_hard_constraint=(CURVATURE_CONSTRAINT_MODE == "hard"),
-            min_velocity=3.0,
-            curvature_constraint_mode=CURVATURE_CONSTRAINT_MODE,
-            **direction_cone_overrides,
-        )
+        constraints = project_config.trajectory_constraints(workspace_regions)
 
         planning_result = ackermann_planner.plan_trajectory(
             source=source,
             target=target,
             workspace_regions=workspace_regions,
             constraints=constraints,
-            cost_weights={
-                "time": 3.0,
-                "path_length": 1.5,
-                "energy": 3.0,
-                "time_derivative_reg": 3.0,
-                "regularization_r": 5.0,
-                "regularization_h": 2.0,
-                "h_ref": 0.08,
-            },
+            cost_weights=project_config.cost_weights(),
             reference_path=path,
-            verbose=True
+            verbose=project_config.ackermann.verbose
         )
 
         # 步骤9：打印结果
@@ -444,20 +287,10 @@ def run_ackermann_gcs_test(scenario: str,
         if planning_result.success:
             try:
                 # 使用新的模块化可视化系统
-                from visualization.ackermann import visualize_ackermann_gcs_enhanced, VisualizationConfig
+                from visualization.ackermann import visualize_ackermann_gcs_enhanced
                 
                 # 创建配置
-                viz_config = VisualizationConfig(
-                    num_samples=200,
-                    show_iris_regions=True,
-                    show_obstacles=True,
-                    show_corridor=True,
-                    show_astar_path=True,
-                    show_3d_trajectory=True,
-                    show_theta_profile=True,
-                    figsize=(20, 14),
-                    dpi=150
-                )
+                viz_config = project_config.visualization_config()
                 
                 # 执行可视化
                 visualize_ackermann_gcs_enhanced(
@@ -470,10 +303,16 @@ def run_ackermann_gcs_test(scenario: str,
                     astar_path=None,  # TODO: 从planner获取A*路径
                     corridor_width=corridor_width,
                     resolution=0.1,  # C_space的分辨率
-                    save_path=f"./output/ackermann_gcs_{scenario}_enhanced.png",
+                    save_path=os.path.join(
+                        project_config.visualization.output_dir,
+                        f"ackermann_gcs_{scenario}_enhanced.png",
+                    ),
                     config=viz_config
                 )
-                print(f"增强版可视化已保存到: ./output/ackermann_gcs_{scenario}_enhanced.png")
+                print(
+                    "增强版可视化已保存到: "
+                    f"{project_config.visualization.output_dir}/ackermann_gcs_{scenario}_enhanced.png"
+                )
                 
             except Exception as e:
                 print(f"增强版可视化失败: {str(e)}")
@@ -487,9 +326,15 @@ def run_ackermann_gcs_test(scenario: str,
                         vehicle_params=vehicle_params,
                         source=source,
                         target=target,
-                        save_path=f"./output/ackermann_gcs_{scenario}.png",
+                        save_path=os.path.join(
+                            project_config.visualization.output_dir,
+                            f"ackermann_gcs_{scenario}.png",
+                        ),
                     )
-                    print(f"简化可视化已保存到: ./output/ackermann_gcs_{scenario}.png")
+                    print(
+                        "简化可视化已保存到: "
+                        f"{project_config.visualization.output_dir}/ackermann_gcs_{scenario}.png"
+                    )
                 except Exception as e2:
                     print(f"简化可视化也失败: {str(e2)}")
 
@@ -706,13 +551,20 @@ def create_test_map(map_size: int = 200, scenario: str = 'basic') -> np.ndarray:
     return obstacle_map
 
 
-def plan_path(c_space: SE2ConfigurationSpace, start: Tuple, goal: Tuple) -> Optional[List]:
+def plan_path(
+    c_space: SE2ConfigurationSpace,
+    start: Tuple,
+    goal: Tuple,
+    project_config: Optional[ProjectConfig] = None,
+) -> Optional[List]:
     """A*路径规划"""
+    project_config = project_config or _default_project_config()
     robot = create_rectangle_robot(length=1.5, width=1.0)
     planner = FastSE2AStarPlanner(
-        c_space=c_space, robot=robot, min_radius=1.5,
-        resolution=0.5, theta_resolution=16,
-        config=AStarPlannerConfig(max_iterations=100000, goal_tolerance=0.5)
+        c_space=c_space, robot=robot, min_radius=project_config.astar.min_radius,
+        resolution=project_config.astar.resolution,
+        theta_resolution=project_config.astar.theta_resolution,
+        config=project_config.astar_planner_config()
     )
     return planner.plan(start, goal)
 
@@ -720,7 +572,8 @@ def plan_path(c_space: SE2ConfigurationSpace, start: Tuple, goal: Tuple) -> Opti
 def run_test(scenario: str = 'basic',
              mode: str = 'hybrid_astar_gcs',
              gcs_strategy: str = 'standard',
-             gcs_cost: str = 'lunar_standard'):
+             gcs_cost: str = 'lunar_standard',
+             project_config: Optional[ProjectConfig] = None):
     """
     运行测试
 
@@ -732,10 +585,16 @@ def run_test(scenario: str = 'basic',
         gcs_strategy: GCS策略预设（仅hybrid_astar_gcs模式有效）
         gcs_cost: GCS成本预设（仅hybrid_astar_gcs模式有效）
     """
+    project_config = project_config or _default_project_config()
+    if mode is None:
+        mode = project_config.planner_mode
+    if gcs_strategy is None:
+        gcs_strategy = project_config.gcs.strategy_preset
+    if gcs_cost is None:
+        gcs_cost = project_config.gcs.cost_preset
+
     # 获取场景配置
-    config = SCENARIO_CONFIGS.get(scenario)
-    if not config:
-        raise ValueError(f"未知场景: {scenario}")
+    config = project_config.scenario_dict(scenario)
 
     # 创建地图
     obstacle_map = create_test_map(config['map_size'], scenario)
@@ -747,9 +606,12 @@ def run_test(scenario: str = 'basic',
             obstacle_map=obstacle_map,
             start=config['start'],
             goal=config['goal'],
-            corridor_width=config['corridor_width']
+            corridor_width=config['corridor_width'],
+            project_config=project_config
         )
     else:
+        from path_planner.scripts.hybrid_astar_gcs_planner import HybridAStarGCSPlanner
+
         # 原有HybridAStarGCS测试流程
         print(f"\n{'='*60}")
         print(f"测试场景: {scenario}, IRIS模式: np")
@@ -758,25 +620,21 @@ def run_test(scenario: str = 'basic',
 
         c_space = SE2ConfigurationSpace(obstacle_map, resolution=0.1)
 
-        path = plan_path(c_space, config['start'], config['goal'])
+        path = plan_path(c_space, config['start'], config['goal'], project_config)
         if not path:
             print("路径规划失败")
             return
 
         # 执行分解（使用预设配置）
-        planner_config = PlannerConfig(
-            use_iris=True,
-            corridor_width=config['corridor_width'],
-
-            # GCS策略和成本预设
-            gcs_strategy_preset=gcs_strategy,
-            gcs_cost_preset=gcs_cost,
-
-            # 可视化
+        planner_config = project_config.planner_config(
+            scenario,
             enable_visualization=True,
             save_visualization=True,
-            output_dir="./output"
         )
+        planner_config.gcs_strategy_preset = gcs_strategy
+        planner_config.gcs_cost_preset = gcs_cost
+        planner_config._apply_gcs_strategy_preset()
+        planner_config._apply_gcs_cost_preset()
 
         planner = HybridAStarGCSPlanner(c_space, planner_config)
         result = planner.process(path)
@@ -787,61 +645,40 @@ def run_test(scenario: str = 'basic',
         print(f"GCS策略: {gcs_strategy}, GCS成本: {gcs_cost}")
 
 
+def main():
+    parser = argparse.ArgumentParser(
+        description="Hybrid A* + IRIS + GCS测试入口",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument("scenario", nargs="?", default=None, help="测试场景名称")
+    parser.add_argument("mode", nargs="?", default=None, choices=VALID_PLANNER_MODES, help="规划模式")
+    parser.add_argument("gcs_strategy", nargs="?", default=None, help="GCS策略预设")
+    parser.add_argument("gcs_cost", nargs="?", default=None, help="GCS成本预设")
+    parser.add_argument("--config", default=None, help="YAML配置文件路径")
+    parser.add_argument(
+        "--set",
+        dest="overrides",
+        action="append",
+        default=[],
+        help="覆盖配置项，例如 --set ackermann.vehicle.max_velocity=8.0",
+    )
+    parser.add_argument("--dump-config", default=None, help="导出合并后的配置到指定YAML文件")
+    args = parser.parse_args()
+
+    project_config = load_project_config(
+        args.config,
+        args.overrides,
+        export_resolved_path=args.dump_config,
+    )
+    scenario = args.scenario or project_config.scenario.name
+    run_test(
+        scenario=scenario,
+        mode=args.mode,
+        gcs_strategy=args.gcs_strategy,
+        gcs_cost=args.gcs_cost,
+        project_config=project_config,
+    )
+
+
 if __name__ == "__main__":
-    import sys
-
-    # 解析命令行参数
-    scenario = sys.argv[1] if len(sys.argv) > 1 else 'basic'
-    mode = sys.argv[2] if len(sys.argv) > 2 else 'hybrid_astar_gcs'
-    gcs_strategy = sys.argv[3] if len(sys.argv) > 3 else 'standard'
-    gcs_cost = sys.argv[4] if len(sys.argv) > 4 else 'lunar_standard'
-
-    # 显示帮助
-    if scenario in ['-h', '--help']:
-        print("\n使用方法:")
-        print("  python test_hybrid_astar_gcs_planner.py [scenario] [mode] [gcs_strategy] [gcs_cost]")
-        print("\n参数说明:")
-        print("  scenario: 测试场景")
-        print("    - basic: 基础场景（200x200地图，默认）")
-        print("    - minimal: 极简场景（100x100地图，3米直线，推荐用于调试）")
-        print("    - simple_straight: 简单直线场景（200x200地图）")
-        print("    - gentle_turn: 温和转弯场景（200x200地图，30度转弯）")
-        print("    - sharp_turn: 急转弯场景（200x200地图，60度转弯）")
-        print("    - corridor_passage: 走廊通道场景（200x200地图，多个障碍物）")
-        print("    - slalom: 绕桩场景（250x250地图，连续绕障）")
-        print("    - maze_navigation: 迷宫导航场景（300x300地图，复杂布局）")
-        print("    - narrow: 窄通道场景（250x250地图）")
-        print("    - complex: 复杂地形场景（500x500地图）")
-        print("    - u_turn: U型转弯场景（200x200地图）")
-        print("    - s_curve: S型弯道场景（200x200地图）")
-        print("    - dynamic: 动态障碍物场景（200x200地图）")
-        print("    - multi_goal: 多目标点场景（200x200地图）")
-        print("    - parking: 泊车场景（200x200地图）")
-        print("\n  mode: 规划模式")
-        print("    - hybrid_astar_gcs: HybridAStar + GCS（默认）")
-        print("    - ackermann_gcs: 阿克曼转向GCS")
-        print("\n  gcs_strategy: GCS策略预设（仅hybrid_astar_gcs模式有效）")
-        print("    - standard: 标准月面探索（默认）")
-        print("    - high_risk: 高风险区域")
-        print("    - emergency: 紧急避障")
-        print("    - complex: 复杂地形")
-        print("\n  gcs_cost: GCS成本预设（仅hybrid_astar_gcs模式有效）")
-        print("    - lunar_standard: 月面标准（默认）")
-        print("    - lunar_high_risk: 月面高风险")
-        print("    - lunar_emergency: 月面紧急")
-        print("    - lunar_complex: 月面复杂")
-        print("    - time_optimal: 时间优先")
-        print("    - path_optimal: 路径优先")
-        print("    - energy_optimal: 能量优先")
-        print("    - balanced: 平衡策略")
-        print("    - smooth: 高平滑性")
-        print("\n示例:")
-        print("  python3 tests/unit/test_hybrid_astar_gcs_planner.py basic hybrid_astar_gcs standard lunar_standard")
-        print("  python3 tests/unit/test_hybrid_astar_gcs_planner.py basic ackermann_gcs")
-        print("  python3 tests/unit/test_hybrid_astar_gcs_planner.py narrow ackermann_gcs")
-        print("  python3 tests/unit/test_hybrid_astar_gcs_planner.py u_turn ackermann_gcs")
-        print("  python3 tests/unit/test_hybrid_astar_gcs_planner.py parking ackermann_gcs")
-        sys.exit(0)
-
-    # 运行测试
-    run_test(scenario, mode, gcs_strategy, gcs_cost)
+    main()

@@ -1,0 +1,151 @@
+extends:
+  - ../scenarios/default.yaml
+
+planner_mode: hybrid_astar_gcs
+
+scenario:
+  name: basic
+
+astar:
+  min_radius: 1.5
+  resolution: 0.5
+  theta_resolution: 16
+  max_iterations: 100000
+  goal_tolerance: 0.5
+  theta_tolerance_deg: 22.5
+  heuristic_weight: 1.2
+  adaptive_jump: true
+  collision_samples: 3
+  high_precision_mode: true
+  path_interpolation: true
+  verbose: true
+
+corridor:
+  width:
+  smooth_path: false
+  smooth_window: 3
+  boundary_margin: 0.5
+
+iris:
+  use_iris: true
+  mode: np
+  config_preset: high_safety
+  iteration_limit: 100
+  termination_threshold: 0.01
+  configuration_space_margin: 0.2
+  min_seed_distance: 1.0
+  max_seed_points: 50
+  merge_overlapping: false
+  num_collision_infeasible_samples: 50
+  requires_sample_as_member: true
+
+gcs:
+  strategy_preset: standard
+  cost_preset: lunar_standard
+  order: 4
+  continuity: 2
+  zero_velocity_at_boundaries: true
+  min_time_derivative: 1.0
+  curvature_constraint_mode: none
+  enable_optimization: true
+  cost_weights:
+    time: 3.0
+    path_length: 1.5
+    energy: 3.0
+    time_derivative_reg: 3.0
+    regularization_r: 5.0
+    regularization_h: 2.0
+    h_ref: 0.08
+    curvature_squared: 0.0
+    curvature_derivative: 0.0
+    curvature_peak: 0.0
+  rounding:
+    flow_tol: 1.0e-5
+    max_paths: 5
+    max_trials: 100
+  solver:
+    max_time: 60.0
+    mip_max_time: 30.0
+    num_threads: 8
+
+ackermann:
+  vehicle:
+    wheelbase: 2.5
+    max_steering_angle_deg: 85.0
+    max_velocity: 10.0
+    max_acceleration: 8.0
+  bezier:
+    order: 5
+    continuity: 1
+    hdot_min: 0.01
+    full_dim_overlap: false
+    hyperellipsoid_num_samples_per_dim_factor: 32
+    max_rounding_attempts: 3
+    max_rounded_paths: 5
+  constraints:
+    min_velocity: 3.0
+    curvature_constraint_mode: direction_cone
+    h_bar_prime:
+    h_bar_prime_safety_factor: 0.7
+    max_h_bar_prime_iterations: 3
+    h_bar_prime_convergence_threshold: 0.15
+    h_bar_prime_relax_factor: 1.3
+    max_h_bar_prime_relax_attempts: 3
+    h_bar_prime_safety_factor_decay: 0.8
+  direction_cone_profile: selective
+  direction_cone_profiles:
+    default: {}
+    loose:
+      direction_cone_alpha: 0.45
+      direction_cone_beta: 0.55
+      direction_cone_gamma: 0.45
+      direction_cone_theta_min_deg: 45.0
+      direction_cone_theta_abs_max_deg: 80.0
+      direction_cone_theta_margin_deg: 25.0
+      direction_cone_width_mu: 3.0
+      direction_cone_rho_warning_ratio: 0.10
+    selective:
+      direction_cone_alpha: 0.45
+      direction_cone_beta: 0.55
+      direction_cone_gamma: 0.45
+      direction_cone_theta_min_deg: 45.0
+      direction_cone_theta_abs_max_deg: 80.0
+      direction_cone_theta_margin_deg: 25.0
+      direction_cone_width_mu: 3.0
+      direction_cone_rho_warning_ratio: 0.10
+      direction_cone_skip_risk_flags:
+        - direction_mismatch
+        - parallel_width_degenerate
+        - parallel_width_small
+        - path_projection_degenerate
+        - overlap_infeasible
+        - overlap_unavailable
+        - theta_width_below_min
+  verbose: true
+
+visualization:
+  enabled: true
+  save: true
+  output_dir: ./output
+  num_samples: 200
+  show_2d: true
+  show_control_points: true
+  show_iris_regions: true
+  show_obstacles: true
+  show_corridor: true
+  show_astar_path: true
+  show_3d_trajectory: true
+  show_theta_profile: true
+  elev: 25.0
+  azim: 45.0
+  figsize: [20.0, 14.0]
+  dpi: 150
+  auto_save: true
+  control_point_size: 60
+  control_point_color: orange
+  control_point_marker: D
+
+batch:
+  scenario: basic
+  num_runs: 10
+  quiet_each_run: true

@@ -11,7 +11,6 @@
 
 # 核心模块
 from .core import (
-    PlotConfig,
     VisualizationConfig,
     BaseVisualizer,
     VisualizationOutputManager,
@@ -44,7 +43,6 @@ from .environment import visualize_environment_with_bezier
 
 __all__ = [
     # 核心配置类
-    'PlotConfig',
     'VisualizationConfig',
     'OutputConfig',
     

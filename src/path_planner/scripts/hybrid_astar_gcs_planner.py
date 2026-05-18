@@ -12,9 +12,9 @@ A*与GCS分层轨迹规划器
 - IRIS模式: 使用 Drake IRIS 生成凸可行区域（推荐）
 
 配置说明：
-- 推荐使用优化配置：IrisNpConfigOptimized
+- 推荐使用 IrisNpConfig
 - 提供预定义模板：高安全、快速处理、平衡配置
-- 详细说明见：iris_np_config_optimized.py 和 IRIS_NP_CONFIG_README.md
+- 详细说明见：config/iris/iris_np_config.py
 """
 
 import os

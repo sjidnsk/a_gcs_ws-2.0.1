@@ -1,0 +1,25 @@
+extends:
+  - default.yaml
+
+planner_mode: ackermann_gcs
+
+ackermann:
+  constraints:
+    curvature_constraint_mode: direction_cone
+    min_velocity: 3.0
+  direction_cone_profile: selective
+
+gcs:
+  cost_weights:
+    time: 3.0
+    path_length: 1.5
+    energy: 3.0
+    time_derivative_reg: 3.0
+    regularization_r: 5.0
+    regularization_h: 2.0
+    h_ref: 0.08
+
+batch:
+  scenario: basic
+  num_runs: 10
+  quiet_each_run: true

@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 # 导入优化配置
 try:
     from config.iris import (
-        IrisNpConfigOptimized,
+        IrisNpConfig,
         get_high_safety_config,
         get_fast_processing_config,
         get_balanced_config
@@ -38,13 +38,13 @@ class PlannerConfig:
     
     推荐使用方式：
     1. 使用预定义IRIS配置模板：
-       from path_planner.util_map.iris_np_config_optimized import get_high_safety_config
+       from config.iris import get_high_safety_config
        iris_config = get_high_safety_config()
        config = PlannerConfig(iris_config=iris_config)
     
     2. 自定义IRIS配置：
-       from path_planner.util_map.iris_np_config_optimized import IrisNpConfigOptimized
-       iris_config = IrisNpConfigOptimized(
+       from config.iris import IrisNpConfig
+       iris_config = IrisNpConfig(
            num_collision_infeasible_samples=100,
            configuration_space_margin=0.3
        )
@@ -88,6 +88,7 @@ class PlannerConfig:
     gcs_continuity: int = 2  # 提高到C3以获得更平滑的曲线
     gcs_time_weight: float = 0.1
     gcs_path_length_weight: float = 1.0
+    gcs_energy_weight: float = 0.01
 
     # GCS策略配置（快速选择）
     # 可选: "standard", "high_risk", "emergency", "complex", "custom"
@@ -102,16 +103,21 @@ class PlannerConfig:
     gcs_custom_time_weight: float = 0.2
     gcs_custom_path_weight: float = 1.0
     gcs_custom_energy_weight: float = 100.0
+    gcs_custom_regularization_weight: float = 0.0
     
     # GCS边界条件配置
     gcs_zero_velocity_at_boundaries: bool = True  # 是否在起点和终点设置零速度约束（改为False以减少突变）
     gcs_min_time_derivative: float = 1.0  # 时间轨迹导数的最小值，防止 dh/ds 过小导致速度突变（降低以允许更平滑的过渡）
     gcs_curvature_constraint_mode: str = "none"  # 可选: "none", "hard", "direction_cone"
+    curvature_squared_weight: float = 0.0
+    curvature_derivative_weight: float = 0.0
+    curvature_peak_weight: float = 0.0
 
     # 阿克曼车辆参数
     ackermann_wheelbase: float = 2.5  # 轴距（米）
     ackermann_v_min: float = 1.58     # 最小速度（米/秒），从成本权重推导: sqrt(w_time/w_energy)*0.5
     ackermann_v_max: float = 10.0     # 最大速度（米/秒）
+    ackermann_max_acceleration: float = 5.0  # 最大加速度（米/秒²）
     ackermann_delta_min: float = -np.deg2rad(85)  # 最小转向角（弧度）
     ackermann_delta_max: float = np.deg2rad(85)   # 最大转向角（弧度）
     ackermann_r_min: Optional[float] = None  # 最小转弯半径（米），由 wheelbase/tan(delta_max) 自动计算
@@ -148,7 +154,7 @@ class PlannerConfig:
     def _apply_gcs_strategy_preset(self):
         """应用GCS策略预设"""
         try:
-            from config.gcs import (
+            from config.gcs.lunar_rover_config import (
                 get_standard_lunar_config,
                 get_high_risk_lunar_config,
                 get_emergency_lunar_config,
@@ -222,6 +228,7 @@ class PlannerConfig:
             weights = configurator.weights
             self.gcs_time_weight = weights.time
             self.gcs_path_length_weight = weights.path_length
+            self.gcs_energy_weight = weights.energy
             
             # 存储能量权重（供后续使用）
             self._gcs_energy_weight = weights.energy

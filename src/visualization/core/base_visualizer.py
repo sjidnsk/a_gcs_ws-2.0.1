@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from typing import Optional, Any, Dict
 import matplotlib.pyplot as plt
 import numpy as np
-from config.visualization import PlotConfig
+from config.visualization import VisualizationConfig
 from .output_manager import VisualizationOutputManager
 
 
@@ -18,7 +18,7 @@ class BaseVisualizer(ABC):
     
     def __init__(
         self,
-        config: Optional[PlotConfig] = None,
+        config: Optional[VisualizationConfig] = None,
         output_manager: Optional[VisualizationOutputManager] = None
     ):
         """初始化可视化器
@@ -27,7 +27,7 @@ class BaseVisualizer(ABC):
             config: 可视化配置对象，如果为None则使用默认配置
             output_manager: 输出管理器对象，如果为None则使用单例实例
         """
-        self.config = config if config is not None else PlotConfig()
+        self.config = config if config is not None else VisualizationConfig()
         self.config.validate()
         
         # 初始化输出管理器

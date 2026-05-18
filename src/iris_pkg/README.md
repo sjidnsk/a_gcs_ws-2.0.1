@@ -11,9 +11,7 @@ iris_pkg/
 │
 ├── config/                     # 配置模块
 │   ├── __init__.py
-│   ├── iris_np_config.py       # 基础配置类
-│   ├── iris_np_config_optimized.py  # 优化配置类 + 预定义模板
-│   └── iris_np_config_documentation.py  # 配置参数详细文档
+│   └── iris_np_config.py       # 配置类 + 预定义模板
 │
 ├── core/                       # 核心功能模块
 │   ├── __init__.py
@@ -32,10 +30,9 @@ iris_pkg/
 
 ### 1. config/ - 配置模块
 
-提供两种配置类：
+提供配置类：
 
-- **`IrisNpConfig`**: 基础配置类，简单易用
-- **`IrisNpConfigOptimized`**: 优化配置类，包含详细文档和预定义模板
+- **`IrisNpConfig`**: IRIS 配置类，包含详细文档和预定义模板
 
 预定义配置模板：
 - `get_high_safety_config()`: 高安全要求配置
@@ -62,7 +59,7 @@ iris_pkg/
 ```python
 from iris_pkg import (
     IrisNpRegionGenerator,
-    IrisNpConfigOptimized,
+    IrisNpConfig,
     get_high_safety_config,
     visualize_iris_np_result
 )
@@ -72,7 +69,7 @@ import numpy as np
 config = get_high_safety_config()
 
 # 或自定义配置
-config = IrisNpConfigOptimized(
+config = IrisNpConfig(
     num_collision_infeasible_samples=100,
     configuration_space_margin=0.25,
     enable_parallel_processing=True,
@@ -128,8 +125,7 @@ pip install drake
 ## 📖 配置参数说明
 
 详细参数说明请参考：
-- `config/iris_np_config_documentation.py`
-- `config/iris_np_config_optimized.py` (包含详细注释)
+- `config/iris/iris_np_config.py`
 
 ## 🎓 核心概念
 

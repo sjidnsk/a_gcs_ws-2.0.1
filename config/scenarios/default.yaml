@@ -1,0 +1,166 @@
+scenarios:
+  basic:
+    map_size: 200
+    start:
+      x: 18.0
+      y: 2.25
+      heading_deg: 143.2394487827058
+    goal:
+      x: 18.0
+      y: 19.5
+      heading_deg: 5.729577951308233
+    corridor_width: 100.0
+  minimal:
+    map_size: 100
+    start:
+      x: 5.0
+      y: 5.0
+      heading_deg: 0.0
+    goal:
+      x: 8.0
+      y: 5.0
+      heading_deg: 0.0
+    corridor_width: 5.0
+  simple_straight:
+    map_size: 200
+    start:
+      x: 5.0
+      y: 10.0
+      heading_deg: 0.0
+    goal:
+      x: 15.0
+      y: 10.0
+      heading_deg: 0.0
+    corridor_width: 4.0
+  gentle_turn:
+    map_size: 200
+    start:
+      x: 5.0
+      y: 10.0
+      heading_deg: 0.0
+    goal:
+      x: 15.0
+      y: 15.0
+      heading_deg: 30.0
+    corridor_width: 4.0
+  sharp_turn:
+    map_size: 200
+    start:
+      x: 5.0
+      y: 10.0
+      heading_deg: 0.0
+    goal:
+      x: 15.0
+      y: 10.0
+      heading_deg: 60.0
+    corridor_width: 5.0
+  corridor_passage:
+    map_size: 200
+    start:
+      x: 5.0
+      y: 10.0
+      heading_deg: 0.0
+    goal:
+      x: 25.0
+      y: 10.0
+      heading_deg: 0.0
+    corridor_width: 4.0
+  slalom:
+    map_size: 250
+    start:
+      x: 5.0
+      y: 12.5
+      heading_deg: 0.0
+    goal:
+      x: 30.0
+      y: 12.8
+      heading_deg: 0.0
+    corridor_width: 4.0
+  maze_navigation:
+    map_size: 300
+    start:
+      x: 30.0
+      y: 30.0
+      heading_deg: 0.0
+    goal:
+      x: 60.0
+      y: 60.0
+      heading_deg: 45.0
+    corridor_width: 4.0
+  narrow:
+    map_size: 250
+    start:
+      x: 1.5
+      y: 12.5
+      heading_deg: -90.0
+    goal:
+      x: 23.0
+      y: 13.0
+      heading_deg: 90.0
+    corridor_width: 100.0
+  complex:
+    map_size: 500
+    start:
+      x: 10.0
+      y: 10.0
+      heading_deg: 0.0
+    goal:
+      x: 45.0
+      y: 45.0
+      heading_deg: 45.0
+    corridor_width: 2.0
+  u_turn:
+    map_size: 200
+    start:
+      x: 16.0
+      y: 7.0
+      heading_deg: 0.0
+    goal:
+      x: 16.0
+      y: 9.5
+      heading_deg: 180.0
+    corridor_width: 2.5
+  s_curve:
+    map_size: 200
+    start:
+      x: 10.0
+      y: 10.0
+      heading_deg: 0.0
+    goal:
+      x: 14.0
+      y: 10.0
+      heading_deg: 0.0
+    corridor_width: 2.5
+  dynamic:
+    map_size: 200
+    start:
+      x: 4.0
+      y: 4.0
+      heading_deg: 0.0
+    goal:
+      x: 14.0
+      y: 14.0
+      heading_deg: 90.0
+    corridor_width: 2.0
+  multi_goal:
+    map_size: 200
+    start:
+      x: 5.0
+      y: 10.0
+      heading_deg: 0.0
+    goal:
+      x: 15.0
+      y: 10.0
+      heading_deg: 0.0
+    corridor_width: 2.5
+  parking:
+    map_size: 200
+    start:
+      x: 10.0
+      y: 13.0
+      heading_deg: 0.0
+    goal:
+      x: 10.0
+      y: 5.0
+      heading_deg: 0.0
+    corridor_width: 2.0

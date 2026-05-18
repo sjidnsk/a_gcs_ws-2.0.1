@@ -39,7 +39,7 @@ git status -sb
 推荐环境：
 
 ```bash
-conda env create -f config/iris_env.yaml
+conda env create -f config/environments/iris_env.yaml
 conda activate iris-py3.12
 python scripts/verify_environment.py
 ```
@@ -77,22 +77,23 @@ pytest tests/unit/test_directional_curvature_bezier_constraints.py -v
 
 ## 4. 开启 direction_cone 模式
 
-当前脚本保留常量入口，可以在测试时切换模式。
+当前脚本通过 YAML 或命令行覆盖切换模式。
 
-文件：
+推荐使用配置文件：
 
-```text
-scripts/batch_test_curvature_constraint.py
-scripts/hybrid_astar_gcs_planner.py
+```bash
+python scripts/batch_test_curvature_constraint.py \
+  --config config/experiments/curvature_direction_cone.yaml
 ```
 
-将常量设置为：
+也可以临时覆盖：
 
-```python
-CURVATURE_CONSTRAINT_MODE = "direction_cone"
+```bash
+python scripts/batch_test_curvature_constraint.py \
+  --set ackermann.constraints.curvature_constraint_mode=direction_cone
 ```
 
-可选值：
+`ackermann.constraints.curvature_constraint_mode` 可选值：
 
 ```text
 "none"
@@ -162,14 +163,14 @@ python scripts/hybrid_astar_gcs_planner.py
 git rev-parse --short HEAD
 python scripts/verify_environment.py
 pytest tests/unit/ -v
-python scripts/batch_test_curvature_constraint.py
+python scripts/batch_test_curvature_constraint.py --config config/experiments/curvature_direction_cone.yaml
 ```
 
 如果端到端失败，请同时保留：
 
 - 失败脚本名；
 - 场景名；
-- 当前 `CURVATURE_CONSTRAINT_MODE`；
+- 当前 `ackermann.constraints.curvature_constraint_mode`；
 - traceback；
 - 后验曲率、速度、加速度、工作空间约束报告；
 - 是否触发 fallback 及 fallback reason。

@@ -17,7 +17,7 @@
 
 ```bash
 # 创建环境
-conda env create -f config/iris_env.yaml
+conda env create -f config/environments/iris_env.yaml
 
 # 激活环境
 conda activate iris-py3.12
@@ -111,7 +111,7 @@ pytest tests/unit/ -v
 ### Q1: 环境创建失败，提示包冲突
 **解决方案**: 尝试使用`--no-build-id`参数：
 ```bash
-conda env create -f config/iris_env.yaml --no-build-id
+conda env create -f config/environments/iris_env.yaml --no-build-id
 ```
 
 ### Q2: Drake安装失败
@@ -138,7 +138,7 @@ conda env remove -n iris-py3.12
 
 ### 导出环境(更新配置)
 ```bash
-conda env export -n iris-py3.12 > config/iris_env.yaml
+conda env export -n iris-py3.12 > config/environments/iris_env.yaml
 ```
 
 ### 克隆环境
@@ -150,7 +150,7 @@ conda create --name iris-py3.12-backup --clone iris-py3.12
 
 | 文件 | 说明 |
 |------|------|
-| `config/iris_env.yaml` | Conda环境配置文件 |
+| `config/environments/iris_env.yaml` | Conda环境配置文件 |
 | `scripts/setup_iris_env.py` | Python部署脚本 |
 | `scripts/setup_iris_env.sh` | Shell部署脚本 |
 | `docs/environment_deployment.md` | 本文档 |

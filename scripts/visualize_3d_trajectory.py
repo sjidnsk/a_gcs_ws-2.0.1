@@ -30,31 +30,14 @@ from typing import Optional, List, Tuple
 
 # from scripts.test_hybrid_astar_gcs_planner import 
 from scripts.hybrid_astar_gcs_planner import (
-    SCENARIO_CONFIGS, 
     convert_iris_to_hpolyhedron, create_endpoint_state,
-    DEFAULT_VEHICLE_PARAMS,
-    CURVATURE_CONSTRAINT_MODE,
-    DIRECTION_CONE_PROFILE,
-    get_direction_cone_profile,
     plan_path,
     create_test_map
 )
 from C_space_pkg.se2 import SE2ConfigurationSpace
-from path_planner.scripts.hybrid_astar_gcs_planner import HybridAStarGCSPlanner
-from path_planner.scripts.planner_support import PlannerConfig
-# from tests.unit.test_hybrid_astar_gcs_planner import plan_path
-from ackermann_gcs_pkg.ackermann_gcs_planner import AckermannGCSPlanner
-from ackermann_gcs_pkg.ackermann_data_structures import (
-    BezierConfig, TrajectoryConstraints
-)
-from ackermann_gcs_pkg.flat_output_mapper import compute_flat_output_mapping
 
-# 导入输出管理器
-from visualization import VisualizationOutputManager
-
-# 导入控制点相关模块
-from visualization.ackermann import extract_control_points
 from config.visualization import ControlPointConfig
+from config.project import ProjectConfig, load_project_config
 
 
 def visualize_3d_trajectory_interactive(
@@ -69,7 +52,8 @@ def visualize_3d_trajectory_interactive(
     control_point_color: Optional[str] = None,
     control_point_marker: Optional[str] = None,
     curvature_constraint_mode: Optional[str] = None,
-    direction_cone_profile: Optional[str] = None
+    direction_cone_profile: Optional[str] = None,
+    project_config: Optional[ProjectConfig] = None
 ):
     """
     交互式3D轨迹可视化
@@ -88,8 +72,15 @@ def visualize_3d_trajectory_interactive(
         curvature_constraint_mode: 曲率约束模式，默认使用 hybrid_astar_gcs_planner.py 中的配置
         direction_cone_profile: direction_cone 参数预设，默认使用 hybrid_astar_gcs_planner.py 中的配置
     """
-    curvature_mode = curvature_constraint_mode or CURVATURE_CONSTRAINT_MODE
-    active_direction_cone_profile = direction_cone_profile or DIRECTION_CONE_PROFILE
+    project_config = project_config or load_project_config()
+    if curvature_constraint_mode is not None:
+        project_config.ackermann.constraints.curvature_constraint_mode = curvature_constraint_mode
+    if direction_cone_profile is not None:
+        project_config.ackermann.direction_cone_profile = direction_cone_profile
+    project_config.validate()
+
+    curvature_mode = project_config.ackermann.constraints.curvature_constraint_mode
+    active_direction_cone_profile = project_config.ackermann.direction_cone_profile
     if curvature_mode not in ("none", "hard", "direction_cone"):
         raise ValueError(
             "curvature_constraint_mode must be one of "
@@ -104,7 +95,7 @@ def visualize_3d_trajectory_interactive(
     print("=" * 60)
     
     # 1. 获取场景配置
-    config = SCENARIO_CONFIGS[scenario]
+    config = project_config.scenario_dict(scenario)
     
     # 2. 创建障碍物地图和配置空间
     print("\n步骤1: 创建配置空间...")
@@ -115,7 +106,7 @@ def visualize_3d_trajectory_interactive(
     print("步骤2: A*路径规划...")
     start = config['start']
     goal = config['goal']
-    path = plan_path(c_space, start, goal)
+    path = plan_path(c_space, start, goal, project_config)
     
     if not path:
         print("✗ A*路径规划失败")
@@ -125,12 +116,13 @@ def visualize_3d_trajectory_interactive(
     
     # 4. IRIS分解
     print("步骤3: IRIS分解...")
-    planner_config = PlannerConfig(
-        use_iris=True,
-        corridor_width=config['corridor_width'],
+    from path_planner.scripts.hybrid_astar_gcs_planner import HybridAStarGCSPlanner
+
+    planner_config = project_config.planner_config(
+        scenario,
         enable_visualization=False,
         save_visualization=False,
-        enable_gcs_optimization=False
+        enable_gcs_optimization=False,
     )
     
     planner = HybridAStarGCSPlanner(c_space, planner_config)
@@ -147,11 +139,13 @@ def visualize_3d_trajectory_interactive(
     
     # 5. AckermannGCS规划
     print("步骤4: AckermannGCS轨迹规划...")
-    vehicle_params = DEFAULT_VEHICLE_PARAMS
+    from ackermann_gcs_pkg.ackermann_gcs_planner import AckermannGCSPlanner
+
+    vehicle_params = project_config.vehicle_params()
     source = create_endpoint_state(start[:2], start[2])
     target = create_endpoint_state(goal[:2], goal[2])
     direction_cone_overrides = (
-        get_direction_cone_profile(active_direction_cone_profile)
+        project_config.direction_cone_overrides()
         if curvature_mode == "direction_cone"
         else {}
     )
@@ -161,20 +155,11 @@ def visualize_3d_trajectory_interactive(
             print(f"  {key}: {value}")
     
     # 构建轨迹约束；direction_cone 模式需要后续传入 reference_path
-    constraints = TrajectoryConstraints(
-        max_velocity=vehicle_params.max_velocity,
-        max_acceleration=vehicle_params.max_acceleration,
-        max_curvature=vehicle_params.max_curvature,
-        workspace_regions=workspace_regions,
-        enable_curvature_hard_constraint=(curvature_mode == "hard"),
-        min_velocity=3.0,
-        curvature_constraint_mode=curvature_mode,
-        **direction_cone_overrides,
-    )
+    constraints = project_config.trajectory_constraints(workspace_regions)
     
     ackermann_planner = AckermannGCSPlanner(
         vehicle_params=vehicle_params,
-        bezier_config=BezierConfig(order=5, continuity=1)
+        bezier_config=project_config.bezier_config()
     )
     
     planning_result = ackermann_planner.plan_trajectory(
@@ -182,17 +167,9 @@ def visualize_3d_trajectory_interactive(
         target=target,
         workspace_regions=workspace_regions,
         constraints=constraints,
-        cost_weights={
-            "time": 3.0,
-            "path_length": 1.5,
-            "energy": 3.0,
-            "time_derivative_reg": 3.0,
-            "regularization_r": 5.0,
-            "regularization_h": 2.0,
-            "h_ref": 0.08,
-        },
+        cost_weights=project_config.cost_weights(),
         reference_path=path,
-        verbose=True  # 启用详细输出，显示约束信息
+        verbose=project_config.ackermann.verbose
     )
     
     if not planning_result.success:
@@ -233,23 +210,29 @@ def visualize_3d_trajectory_interactive(
     if show_control_points:
         print("步骤5b: 提取控制点...")
         try:
+            from visualization.ackermann import extract_control_points
+
             control_point_data = extract_control_points(planning_result.trajectory)
             print(f"✓ 提取到 {control_point_data.num_points} 个控制点")
             
             # 创建控制点配置
             control_point_config = ControlPointConfig(
                 show_control_points=True,
-                control_point_size=control_point_size or 60,
-                control_point_color=control_point_color or 'orange',
-                control_point_marker=control_point_marker or 'D'
+                control_point_size=control_point_size or project_config.visualization.control_point_size,
+                control_point_color=control_point_color or project_config.visualization.control_point_color,
+                control_point_marker=control_point_marker or project_config.visualization.control_point_marker
             )
         except Exception as e:
             print(f"⚠ 控制点提取失败: {str(e)}")
     
     # 7. 采样轨迹
     print("步骤5: 采样轨迹数据...")
+    from ackermann_gcs_pkg.flat_output_mapper import compute_flat_output_mapping
+
     mapping = compute_flat_output_mapping(
-        planning_result.trajectory, vehicle_params, num_samples=200
+        planning_result.trajectory,
+        vehicle_params,
+        num_samples=project_config.visualization.num_samples,
     )
     
     position = mapping["position"]
@@ -339,6 +322,8 @@ def visualize_3d_trajectory_interactive(
         # 自动保存2D图
         if auto_save:
             # 使用输出管理器生成路径（自动生成时间戳run_id）
+            from visualization import VisualizationOutputManager
+
             output_manager = VisualizationOutputManager.get_instance()
             save_path_2d = output_manager.generate_output_path(
                 filename=f'2d_trajectory_{scenario}_{curvature_label}.png',
@@ -346,7 +331,7 @@ def visualize_3d_trajectory_interactive(
                 # 不指定run_id，自动生成时间戳
             )
             fig_2d.tight_layout()
-            fig_2d.savefig(save_path_2d, dpi=150, bbox_inches='tight')
+            fig_2d.savefig(save_path_2d, dpi=project_config.visualization.dpi, bbox_inches='tight')
             print(f"✓ 2D可视化已保存到: {save_path_2d}")
             plt.close(fig_2d)
     
@@ -451,6 +436,8 @@ def visualize_3d_trajectory_interactive(
     # 自动保存逻辑
     if auto_save and save_path is None:
         # 使用输出管理器生成路径（自动生成时间戳run_id）
+        from visualization import VisualizationOutputManager
+
         output_manager = VisualizationOutputManager.get_instance()
         save_path = output_manager.generate_output_path(
             filename=f'3d_trajectory_{scenario}_{curvature_label}.png',
@@ -460,7 +447,7 @@ def visualize_3d_trajectory_interactive(
     
     # 保存图片
     if save_path:
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.savefig(save_path, dpi=project_config.visualization.dpi, bbox_inches='tight')
         print(f"\n✓ 3D可视化已保存到: {save_path}")
     
     # 显示交互式窗口
@@ -489,20 +476,39 @@ def main():
         'scenario', 
         type=str, 
         nargs='?', 
-        default='basic',
-        help='测试场景名称 (default: basic)'
+        default=None,
+        help='测试场景名称；默认使用配置文件中的 scenario.name'
+    )
+    parser.add_argument(
+        '--config',
+        type=str,
+        default=None,
+        help='YAML配置文件路径'
+    )
+    parser.add_argument(
+        '--set',
+        dest='overrides',
+        action='append',
+        default=[],
+        help='覆盖配置项，例如 --set visualization.elev=35.0'
+    )
+    parser.add_argument(
+        '--dump-config',
+        type=str,
+        default=None,
+        help='导出合并后的配置到指定YAML文件'
     )
     parser.add_argument(
         '--elev', 
         type=float, 
-        default=25.0,
-        help='初始仰角（度）(default: 25.0)'
+        default=None,
+        help='初始仰角（度）；默认使用配置文件'
     )
     parser.add_argument(
         '--azim', 
         type=float, 
-        default=45.0,
-        help='初始方位角（度）(default: 45.0)'
+        default=None,
+        help='初始方位角（度）；默认使用配置文件'
     )
     parser.add_argument(
         '--save', 
@@ -547,39 +553,45 @@ def main():
         '--curvature-mode',
         choices=('none', 'hard', 'direction_cone'),
         default=None,
-        help=(
-            "曲率约束模式；默认使用 scripts/hybrid_astar_gcs_planner.py "
-            f"中的 CURVATURE_CONSTRAINT_MODE={CURVATURE_CONSTRAINT_MODE!r}"
-        )
+        help="曲率约束模式；默认使用配置文件中的 ackermann.constraints.curvature_constraint_mode"
     )
     parser.add_argument(
         '--direction-cone-profile',
         choices=('default', 'loose', 'selective'),
         default=None,
-        help=(
-            "direction_cone 参数预设；默认使用 "
-            f"scripts/hybrid_astar_gcs_planner.py 中的 DIRECTION_CONE_PROFILE="
-            f"{DIRECTION_CONE_PROFILE!r}。loose 会放宽方向锥角并降低 rho；"
-            "selective 还会跳过方向错配或几何高风险边。"
-        )
+        help="direction_cone 参数预设；默认使用配置文件中的 ackermann.direction_cone_profile"
     )
     
     args = parser.parse_args()
+    project_config = load_project_config(
+        args.config,
+        args.overrides,
+        export_resolved_path=args.dump_config,
+    )
+    scenario = args.scenario or project_config.scenario.name
+    elev = args.elev if args.elev is not None else project_config.visualization.elev
+    azim = args.azim if args.azim is not None else project_config.visualization.azim
+    auto_save = False if args.no_auto_save else project_config.visualization.auto_save
+    show_2d = False if args.no_2d else project_config.visualization.show_2d
+    show_control_points = (
+        False if args.no_control_points else project_config.visualization.show_control_points
+    )
     
     # 执行可视化
     visualize_3d_trajectory_interactive(
-        scenario=args.scenario,
-        elev=args.elev,
-        azim=args.azim,
+        scenario=scenario,
+        elev=elev,
+        azim=azim,
         save_path=args.save,
-        auto_save=not args.no_auto_save,
-        show_2d=not args.no_2d,
-        show_control_points=not args.no_control_points,
+        auto_save=auto_save,
+        show_2d=show_2d,
+        show_control_points=show_control_points,
         control_point_size=args.control_point_size,
         control_point_color=args.control_point_color,
         control_point_marker=args.control_point_marker,
         curvature_constraint_mode=args.curvature_mode,
-        direction_cone_profile=args.direction_cone_profile
+        direction_cone_profile=args.direction_cone_profile,
+        project_config=project_config
     )
 
 

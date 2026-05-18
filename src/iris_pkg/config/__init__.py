@@ -7,7 +7,6 @@ IRIS配置模块（向后兼容接口）
 
 from config.iris import (
     IrisNpConfig,
-    IrisNpConfigOptimized,
     get_high_safety_config,
     get_fast_processing_config,
     get_balanced_config,
@@ -22,7 +21,6 @@ from config.iris import (
 
 __all__ = [
     'IrisNpConfig',
-    'IrisNpConfigOptimized',
     'get_high_safety_config',
     'get_fast_processing_config',
     'get_balanced_config',

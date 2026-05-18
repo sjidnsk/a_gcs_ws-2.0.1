@@ -5,7 +5,7 @@ IrisNp 凸区域生成模块
 
 主要导出:
 - IrisNpRegionGenerator: 凸区域生成器
-- IrisNpConfig / IrisNpConfigOptimized: 配置参数
+- IrisNpConfig: 配置参数
 - IrisNpRegion / IrisNpResult: 数据结构
 - SimpleCollisionCheckerForIrisNp: 碰撞检测器
 - visualize_iris_np_result: 可视化函数
@@ -26,7 +26,6 @@ if path not in sys.path:
 
 from config.iris import (
     IrisNpConfig,
-    IrisNpConfigOptimized,
     get_high_safety_config,
     get_fast_processing_config,
     get_balanced_config,
@@ -54,7 +53,6 @@ from .core import (
 __all__ = [
     # 配置
     'IrisNpConfig',
-    'IrisNpConfigOptimized',
     'get_high_safety_config',
     'get_fast_processing_config',
     'get_balanced_config',

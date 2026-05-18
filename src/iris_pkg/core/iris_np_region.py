@@ -13,9 +13,9 @@ IrisNp 是 Drake 中实际存在的算法，专门用于机器人配置空间。
 4. 提供概率保证的无碰撞区域
 
 配置说明：
-- 使用 IrisNpConfigOptimized 进行配置（推荐）
+- 使用 IrisNpConfig 进行配置
 - 提供预定义配置模板：高安全、快速处理、平衡配置
-- 详细参数说明见 IrisNpConfigOptimized 类的 docstring
+- 详细参数说明见 IrisNpConfig 类的 docstring
 
 重构说明：
 - 已将功能模块提取到独立文件中：
@@ -39,7 +39,7 @@ from pydrake.geometry.optimization import HPolyhedron
 # 导入优化配置
 try:
     from config.iris import (
-        IrisNpConfigOptimized,
+        IrisNpConfig,
         get_high_safety_config,
         get_fast_processing_config,
         get_balanced_config
@@ -50,7 +50,6 @@ except ImportError:
     warnings.warn("优化配置模块未找到，使用默认配置")
 
 # 导入内部模块
-from config.iris import IrisNpConfig
 from .iris_np_region_data import IrisNpRegion, IrisNpResult
 from .iris_np_collision import SimpleCollisionCheckerForIrisNp
 from .iris_np_expansion import IrisNpExpansion
