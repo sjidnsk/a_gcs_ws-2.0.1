@@ -23,6 +23,7 @@ from .ackermann_data_structures import (
 from .trajectory_evaluator import TrajectoryEvaluator
 from .curvature_statistics import CurvatureStatistics
 from .h_bar_prime_iteration import iterate_h_bar_prime, HBarPrimeIterationResult
+from .directional_curvature_parameters import DirectionalCurvatureParameterBuilder
 
 
 class AckermannGCSPlanner:
@@ -62,6 +63,8 @@ class AckermannGCSPlanner:
         workspace_regions: List[HPolyhedron],
         constraints: Optional[TrajectoryConstraints] = None,
         cost_weights: Optional[dict] = None,
+        reference_path: Optional[List] = None,
+        edge_reference_map: Optional[dict] = None,
         verbose: bool = True,
     ) -> PlanningResult:
         """
@@ -171,7 +174,137 @@ class AckermannGCSPlanner:
 
         # 步骤4.5：添加曲率硬约束
         h_bar_prime_iteration_result = None
-        if constraints.enable_curvature_hard_constraint or \
+        direction_cone_diagnostics = None
+        fallback_reason = ""
+        active_curvature_constraint_mode = constraints.curvature_constraint_mode
+
+        def _make_hard_fallback_constraints():
+            return TrajectoryConstraints(
+                max_velocity=constraints.max_velocity,
+                max_acceleration=constraints.max_acceleration,
+                max_curvature=constraints.max_curvature,
+                workspace_regions=workspace_regions,
+                enable_curvature_hard_constraint=True,
+                min_velocity=constraints.min_velocity,
+                curvature_constraint_mode="hard",
+                h_bar_prime=constraints.h_bar_prime,
+                h_bar_prime_safety_factor=constraints.h_bar_prime_safety_factor,
+                max_h_bar_prime_iterations=constraints.max_h_bar_prime_iterations,
+                h_bar_prime_convergence_threshold=(
+                    constraints.h_bar_prime_convergence_threshold
+                ),
+                h_bar_prime_relax_factor=constraints.h_bar_prime_relax_factor,
+                max_h_bar_prime_relax_attempts=(
+                    constraints.max_h_bar_prime_relax_attempts
+                ),
+                h_bar_prime_safety_factor_decay=(
+                    constraints.h_bar_prime_safety_factor_decay
+                ),
+            )
+
+        def _run_hard_fallback(reason):
+            if verbose:
+                print(f"[Planner] Direction-cone fallback: {reason}")
+            fallback_result = self.plan_trajectory(
+                source=source,
+                target=target,
+                workspace_regions=workspace_regions,
+                constraints=_make_hard_fallback_constraints(),
+                cost_weights=cost_weights,
+                reference_path=reference_path,
+                edge_reference_map=edge_reference_map,
+                verbose=verbose,
+            )
+            fallback_result.fallback_reason = reason
+            fallback_result.direction_cone_diagnostics = direction_cone_diagnostics
+            return fallback_result
+
+        if constraints.curvature_constraint_mode == "direction_cone":
+            if verbose:
+                print("\n" + "=" * 70)
+                print("方向锥曲率约束添加")
+                print("=" * 70)
+                print("约束类型: 线性方向锥充分条件")
+                print("约束形式: t^T D >= rho, |n^T D| <= eta t^T D")
+                print("          sigma n^T A + eta tau t^T A <= kappa_max rho^2")
+                print("h_bar_prime: skipped")
+                print("=" * 70)
+
+            try:
+                if reference_path is None:
+                    raise ValueError(
+                        "reference_path is required for direction_cone mode"
+                    )
+
+                boundary_edge_ids = set()
+                for edge in bezier_gcs.gcs.Edges():
+                    if (
+                        target.velocity is not None
+                        and abs(target.velocity) < 1e-9
+                        and edge.v() == bezier_gcs.target
+                    ):
+                        boundary_edge_ids.add(id(edge))
+                        edge_id_attr = getattr(edge, "id", None)
+                        if callable(edge_id_attr):
+                            boundary_edge_ids.add(edge_id_attr())
+
+                builder = DirectionalCurvatureParameterBuilder(
+                    constraints=constraints,
+                    min_turning_radius=1.0 / constraints.max_curvature,
+                )
+                edge_params = builder.build_for_edges(
+                    regions=workspace_regions,
+                    reference_path=reference_path,
+                    edges=list(bezier_gcs.gcs.Edges()),
+                    edge_reference_map=edge_reference_map,
+                    boundary_edge_ids=boundary_edge_ids,
+                )
+                constraint_summary = bezier_gcs.addDirectionalCurvatureConstraint(
+                    edge_params=edge_params,
+                    boundary_edge_ids=boundary_edge_ids,
+                    verbose=verbose,
+                )
+                direction_cone_diagnostics = {
+                    **builder.last_summary,
+                    **constraint_summary,
+                    "risk_flags": sorted({
+                        flag
+                        for params in edge_params.values()
+                        for flag in params.risk_flags
+                    }),
+                }
+                if verbose:
+                    print("✓ 方向锥曲率约束添加完成")
+                    print(
+                        "  edge数: "
+                        f"{direction_cone_diagnostics['constrained_edges']}, "
+                        "rho范围: "
+                        f"[{direction_cone_diagnostics['rho_min']:.4f}, "
+                        f"{direction_cone_diagnostics['rho_max']:.4f}], "
+                        "theta范围: "
+                        f"[{direction_cone_diagnostics['theta_min_deg']:.2f}°, "
+                        f"{direction_cone_diagnostics['theta_max_deg']:.2f}°], "
+                        "高风险edge: "
+                        f"{direction_cone_diagnostics['risk_edge_count']}"
+                    )
+            except Exception as e:
+                fallback_reason = f"direction_cone_fallback_to_hard: {e}"
+                if verbose:
+                    print(f"⚠️  方向锥曲率约束添加失败: {e}")
+                    print("   回退到直接 hard Lorentz 曲率约束")
+                try:
+                    bezier_gcs.addCurvatureHardConstraint(
+                        max_curvature=constraints.max_curvature,
+                        min_velocity=constraints.min_velocity,
+                        h_bar_prime=constraints.h_bar_prime,
+                        h_bar_prime_safety_factor=constraints.h_bar_prime_safety_factor,
+                    )
+                    active_curvature_constraint_mode = "hard"
+                except ValueError as hard_error:
+                    if verbose:
+                        print(f"⚠️  fallback hard 曲率约束添加失败: {hard_error}")
+
+        elif constraints.enable_curvature_hard_constraint or \
            constraints.curvature_constraint_mode == "hard":
             if verbose:
                 print("\n" + "=" * 70)
@@ -446,6 +579,10 @@ class AckermannGCSPlanner:
                 print("[Planner] ✗ GCS求解失败")
 
         if trajectory is None:
+            if constraints.curvature_constraint_mode == "direction_cone":
+                reason = fallback_reason or "direction_cone_solve_failed"
+                return _run_hard_fallback(reason)
+
             solve_time = time.time() - start_time
             if verbose:
                 print(f"[Planner] Failed to solve trajectory!")
@@ -459,6 +596,9 @@ class AckermannGCSPlanner:
                 num_iterations=0,
                 convergence_reason="solve_failed",
                 error_message="Failed to solve trajectory",
+                curvature_constraint_mode=active_curvature_constraint_mode,
+                direction_cone_diagnostics=direction_cone_diagnostics,
+                fallback_reason=fallback_reason,
             )
 
         # 步骤7：评估轨迹
@@ -467,9 +607,20 @@ class AckermannGCSPlanner:
 
         trajectory_report = self.evaluator.evaluate_trajectory(trajectory, constraints)
 
+        if (
+            constraints.curvature_constraint_mode == "direction_cone"
+            and trajectory_report.curvature_violation
+            and trajectory_report.curvature_violation.is_violated
+        ):
+            reason = (
+                "direction_cone_curvature_violation: "
+                f"{trajectory_report.curvature_violation.max_violation:.6f}"
+            )
+            return _run_hard_fallback(reason)
+
         # 后验验证边界段曲率（如果启用了曲率硬约束）
         if constraints.enable_curvature_hard_constraint or \
-           constraints.curvature_constraint_mode == "hard":
+           active_curvature_constraint_mode in ("hard", "direction_cone"):
             if trajectory_report.curvature_violation and \
                trajectory_report.curvature_violation.is_violated:
                 if verbose:
@@ -530,7 +681,10 @@ class AckermannGCSPlanner:
 
         if verbose:
             print(f"[Planner] Total solve time: {solve_time:.2f}s")
-            print(f"[Planner] Solver: GCS convex relaxation (curvature hard constraint)")
+            print(
+                "[Planner] Solver: GCS convex relaxation "
+                f"({active_curvature_constraint_mode} curvature constraint)"
+            )
             print(f"[Planner] Converged: {converged}")
 
         convergence_reason = "converged" if converged else "max_iterations_reached"
@@ -543,4 +697,7 @@ class AckermannGCSPlanner:
             num_iterations=0,
             convergence_reason=convergence_reason,
             error_message="",
+            curvature_constraint_mode=active_curvature_constraint_mode,
+            direction_cone_diagnostics=direction_cone_diagnostics,
+            fallback_reason=fallback_reason,
         )

@@ -22,6 +22,15 @@ if TYPE_CHECKING:
     from .ackermann_bezier_gcs import AckermannBezierGCS
     from .ackermann_gcs_planner import AckermannGCSPlanner
     from .trajectory_evaluator import TrajectoryEvaluator
+    from .directional_curvature_parameters import (
+        DirectionalCurvatureParameterBuilder,
+        DirectionalCurvatureSegmentParams,
+        DirectionalLinearConstraintRow,
+        PreprocessedReferencePath,
+        compute_support_width,
+        directional_curvature_linear_constraints,
+        preprocess_reference_path,
+    )
     from .h_bar_prime_iteration import (
         HBarPrimeIterationResult,
         iterate_h_bar_prime,
@@ -71,6 +80,20 @@ def __getattr__(name: str):
         from .trajectory_evaluator import TrajectoryEvaluator
         _import_cache[name] = TrajectoryEvaluator
         return TrajectoryEvaluator
+
+    if name in (
+        "DirectionalCurvatureParameterBuilder",
+        "DirectionalCurvatureSegmentParams",
+        "DirectionalLinearConstraintRow",
+        "PreprocessedReferencePath",
+        "compute_support_width",
+        "directional_curvature_linear_constraints",
+        "preprocess_reference_path",
+    ):
+        from . import directional_curvature_parameters
+        obj = getattr(directional_curvature_parameters, name)
+        _import_cache[name] = obj
+        return obj
     
     if name in ("HBarPrimeIterationResult", "iterate_h_bar_prime"):
         from . import h_bar_prime_iteration
@@ -102,6 +125,13 @@ __all__ = [
     "AckermannBezierGCS",
     "AckermannGCSPlanner",
     "TrajectoryEvaluator",
+    "DirectionalCurvatureParameterBuilder",
+    "DirectionalCurvatureSegmentParams",
+    "DirectionalLinearConstraintRow",
+    "PreprocessedReferencePath",
+    "compute_support_width",
+    "directional_curvature_linear_constraints",
+    "preprocess_reference_path",
     "HBarPrimeIterationResult",
     "iterate_h_bar_prime",
     "FlatOutputMapper",

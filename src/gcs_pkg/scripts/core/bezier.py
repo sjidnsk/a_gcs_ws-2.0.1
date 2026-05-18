@@ -982,6 +982,163 @@ class BezierGCS(BaseGCS):
                 )
                 self._curvature_constraint_bindings.append((edge, binding))
 
+    def addDirectionalCurvatureConstraint(
+        self,
+        edge_params,
+        boundary_edge_ids=None,
+        verbose=False,
+    ):
+        """
+        Add edge-wise direction-cone curvature constraints.
+
+        The constraints are linear sufficient conditions:
+            t^T D_i >= rho
+            |n^T D_i| <= eta * t^T D_i
+            sigma n^T A_j + eta tau t^T A_j <= kappa_max * rho^2
+
+        Args:
+            edge_params: Mapping or iterable of parameter objects. Each parameter
+                must expose edge_id, t, n, rho, eta, and kappa_max.
+            boundary_edge_ids: Optional set of edge identifiers to skip.
+            verbose: Whether to print a compact summary.
+
+        Returns:
+            dict: Summary with counts for constrained and skipped edges.
+        """
+        params_by_key = self._normalize_directional_edge_params(edge_params)
+        boundary_edge_ids = boundary_edge_ids or set()
+
+        u_path_dot = self.u_r_trajectory.MakeDerivative(1).control_points()
+        u_path_ddot = self.u_r_trajectory.MakeDerivative(2).control_points()
+        dot_coefficients = [
+            DecomposeLinearExpressions(expr, self.u_vars)
+            for expr in u_path_dot
+        ]
+        ddot_coefficients = [
+            DecomposeLinearExpressions(expr, self.u_vars)
+            for expr in u_path_ddot
+        ]
+
+        constrained_edges = 0
+        skipped_source_edges = 0
+        skipped_boundary_edges = 0
+        skipped_missing_params = 0
+        constraints_added = 0
+
+        for edge in self.gcs.Edges():
+            if edge.u() == self.source:
+                skipped_source_edges += 1
+                continue
+            if self._directional_edge_matches_any(edge, boundary_edge_ids):
+                skipped_boundary_edges += 1
+                continue
+
+            params = self._directional_params_for_edge(edge, params_by_key)
+            if params is None:
+                skipped_missing_params += 1
+                continue
+
+            rows = self._build_directional_curvature_rows(
+                params,
+                dot_coefficients,
+                ddot_coefficients,
+            )
+            for coefficients, lower, upper in rows:
+                linear_con = LinearConstraint(
+                    np.asarray(coefficients, dtype=float).reshape(1, -1),
+                    np.array([lower], dtype=float),
+                    np.array([upper], dtype=float),
+                )
+                self.curvature_constraints.append(linear_con)
+                binding = edge.AddConstraint(
+                    Binding[Constraint](linear_con, edge.xu())
+                )
+                self._curvature_constraint_bindings.append((edge, binding))
+                constraints_added += 1
+            constrained_edges += 1
+
+        summary = {
+            "constrained_edges": constrained_edges,
+            "constraints_added": constraints_added,
+            "skipped_source_edges": skipped_source_edges,
+            "skipped_boundary_edges": skipped_boundary_edges,
+            "skipped_missing_params": skipped_missing_params,
+            "rows_per_edge": 3 * len(dot_coefficients) + 4 * len(ddot_coefficients),
+        }
+        if verbose:
+            print(
+                "Directional curvature constraints: "
+                f"{constraints_added} rows on {constrained_edges} edges "
+                f"(missing params: {skipped_missing_params}, "
+                f"boundary skipped: {skipped_boundary_edges})"
+            )
+        return summary
+
+    @staticmethod
+    def _build_directional_curvature_rows(params, dot_coefficients, ddot_coefficients):
+        t = np.asarray(params.t, dtype=float)
+        n = np.asarray(params.n, dtype=float)
+        rho = float(params.rho)
+        eta = float(params.eta)
+        kappa_max = float(params.kappa_max)
+        rows = []
+
+        for A_ctrl in dot_coefficients:
+            t_row = t @ A_ctrl
+            n_row = n @ A_ctrl
+            rows.append((t_row, rho, np.inf))
+            rows.append((n_row - eta * t_row, -np.inf, 0.0))
+            rows.append((-n_row - eta * t_row, -np.inf, 0.0))
+
+        curvature_bound = kappa_max * rho ** 2
+        for A_ctrl in ddot_coefficients:
+            t_row = t @ A_ctrl
+            n_row = n @ A_ctrl
+            for sigma in (-1.0, 1.0):
+                for tau in (-1.0, 1.0):
+                    rows.append((
+                        sigma * n_row + eta * tau * t_row,
+                        -np.inf,
+                        curvature_bound,
+                    ))
+        return rows
+
+    @staticmethod
+    def _normalize_directional_edge_params(edge_params):
+        if isinstance(edge_params, dict):
+            params_iter = edge_params.items()
+            return {
+                key: value
+                for key, value in params_iter
+            }
+        params_by_key = {}
+        for params in edge_params:
+            params_by_key[getattr(params, "edge_id")] = params
+        return params_by_key
+
+    @staticmethod
+    def _directional_edge_keys(edge):
+        keys = {id(edge)}
+        for attr_name in ("id", "name"):
+            attr = getattr(edge, attr_name, None)
+            if callable(attr):
+                try:
+                    keys.add(attr())
+                except Exception:
+                    pass
+        return keys
+
+    @classmethod
+    def _directional_edge_matches_any(cls, edge, candidates):
+        return bool(cls._directional_edge_keys(edge).intersection(candidates))
+
+    @classmethod
+    def _directional_params_for_edge(cls, edge, params_by_key):
+        for key in cls._directional_edge_keys(edge):
+            if key in params_by_key:
+                return params_by_key[key]
+        return None
+
     def removeCurvatureHardConstraints(self, verbose=False):
         """移除GCS图上所有已添加的曲率硬约束。
 

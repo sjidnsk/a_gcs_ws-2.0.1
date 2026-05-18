@@ -54,6 +54,7 @@ from ackermann_gcs_pkg.ackermann_data_structures import (
     VehicleParams,
     EndpointState,
     BezierConfig,
+    TrajectoryConstraints,
     PlanningResult
 )
 
@@ -70,6 +71,7 @@ DEFAULT_VEHICLE_PARAMS = VehicleParams(
     max_velocity=10.0,                # 最大速度（米/秒）
     max_acceleration=8.0              # 最大加速度（米/秒²）
 )
+CURVATURE_CONSTRAINT_MODE = "none"  # "none", "hard", or "direction_cone"
 
 # 场景配置字典
 SCENARIO_CONFIGS = {
@@ -351,12 +353,23 @@ def run_ackermann_gcs_test(scenario: str,
         )
 
         # 步骤8：执行轨迹规划
+        constraints = TrajectoryConstraints(
+            max_velocity=vehicle_params.max_velocity,
+            max_acceleration=vehicle_params.max_acceleration,
+            max_curvature=vehicle_params.max_curvature,
+            workspace_regions=workspace_regions,
+            enable_curvature_hard_constraint=(CURVATURE_CONSTRAINT_MODE == "hard"),
+            min_velocity=2.0,
+            curvature_constraint_mode=CURVATURE_CONSTRAINT_MODE,
+        )
+
         planning_result = ackermann_planner.plan_trajectory(
             source=source,
             target=target,
             workspace_regions=workspace_regions,
-            constraints=None,
+            constraints=constraints,
             cost_weights={"time": 1.0, "path_length": 0.1, "energy": 0.01},
+            reference_path=path,
             verbose=True
         )
 

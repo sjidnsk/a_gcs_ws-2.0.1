@@ -37,6 +37,8 @@ from ackermann_gcs_pkg.ackermann_data_structures import (
     BezierConfig, TrajectoryConstraints
 )
 
+CURVATURE_CONSTRAINT_MODE = "hard"  # "none", "hard", or "direction_cone"
+
 
 def run_single_test(run_id: int, scenario: str = 'basic'):
     """运行单次测试，返回结果字典"""
@@ -98,9 +100,9 @@ def run_single_test(run_id: int, scenario: str = 'basic'):
             max_acceleration=vehicle_params.max_acceleration,
             max_curvature=vehicle_params.max_curvature,
             workspace_regions=workspace_regions,
-            enable_curvature_hard_constraint=True,
+            enable_curvature_hard_constraint=(CURVATURE_CONSTRAINT_MODE == "hard"),
             min_velocity=2.0,
-            curvature_constraint_mode="hard",
+            curvature_constraint_mode=CURVATURE_CONSTRAINT_MODE,
         )
 
         ackermann_planner = AckermannGCSPlanner(
@@ -119,6 +121,7 @@ def run_single_test(run_id: int, scenario: str = 'basic'):
                 "path_length": 1.5,
                 "energy": 3.0,
             },
+            reference_path=astar_path,
             verbose=False
         )
         result['solve_time'] = time.time() - t_start

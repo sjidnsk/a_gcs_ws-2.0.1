@@ -120,6 +120,7 @@ class CurvatureConstraintMode(Enum):
     """曲率约束模式枚举"""
     NONE = "none"            # 无曲率硬约束（仅评估检查）
     HARD = "hard"            # 凸硬约束（Lorentz锥，保守但可靠）
+    DIRECTION_CONE = "direction_cone"  # 方向锥线性充分条件
     TURNING_RADIUS = "turning_radius"  # 旧转弯半径约束（盒约束，已弃用）
 
 
@@ -167,6 +168,17 @@ class TrajectoryConstraints:
     h_bar_prime_relax_factor: float = 1.3
     max_h_bar_prime_relax_attempts: int = 3
     h_bar_prime_safety_factor_decay: float = 0.8
+    direction_cone_alpha: float = 0.60
+    direction_cone_beta: float = 0.75
+    direction_cone_gamma: float = 0.60
+    direction_cone_theta_min_deg: float = 25.0
+    direction_cone_theta_abs_max_deg: float = 45.0
+    direction_cone_theta_margin_deg: float = 10.0
+    direction_cone_width_mu: float = 0.8
+    direction_cone_compute_all_overlap_widths: bool = False
+    direction_cone_cache_support_widths: bool = True
+    direction_cone_use_vertex_width_when_available: bool = True
+    direction_cone_rho_warning_ratio: float = 0.2
 
     def __post_init__(self):
         """参数验证"""
@@ -212,6 +224,36 @@ class TrajectoryConstraints:
             raise ValueError(
                 f"h_bar_prime_safety_factor_decay must be in (0, 1.0], "
                 f"got {self.h_bar_prime_safety_factor_decay}"
+            )
+        for field_name in (
+            "direction_cone_alpha",
+            "direction_cone_beta",
+            "direction_cone_gamma",
+            "direction_cone_width_mu",
+            "direction_cone_rho_warning_ratio",
+        ):
+            value = getattr(self, field_name)
+            if value <= 0:
+                raise ValueError(f"{field_name} must be positive, got {value}")
+        if self.direction_cone_theta_min_deg <= 0:
+            raise ValueError(
+                "direction_cone_theta_min_deg must be positive, "
+                f"got {self.direction_cone_theta_min_deg}"
+            )
+        if self.direction_cone_theta_abs_max_deg <= 0:
+            raise ValueError(
+                "direction_cone_theta_abs_max_deg must be positive, "
+                f"got {self.direction_cone_theta_abs_max_deg}"
+            )
+        if self.direction_cone_theta_margin_deg < 0:
+            raise ValueError(
+                "direction_cone_theta_margin_deg must be non-negative, "
+                f"got {self.direction_cone_theta_margin_deg}"
+            )
+        if self.direction_cone_theta_min_deg > self.direction_cone_theta_abs_max_deg:
+            raise ValueError(
+                "direction_cone_theta_min_deg must be <= "
+                "direction_cone_theta_abs_max_deg"
             )
 
     @classmethod
@@ -531,6 +573,9 @@ class PlanningResult:
     num_iterations: int = 0
     convergence_reason: str = ""
     error_message: str = ""
+    curvature_constraint_mode: str = ""
+    direction_cone_diagnostics: Optional[Dict] = None
+    fallback_reason: str = ""
 
     def todict(self) -> Dict:
         """转换为字典"""

@@ -106,6 +106,7 @@ class PlannerConfig:
     # GCS边界条件配置
     gcs_zero_velocity_at_boundaries: bool = True  # 是否在起点和终点设置零速度约束（改为False以减少突变）
     gcs_min_time_derivative: float = 1.0  # 时间轨迹导数的最小值，防止 dh/ds 过小导致速度突变（降低以允许更平滑的过渡）
+    gcs_curvature_constraint_mode: str = "none"  # 可选: "none", "hard", "direction_cone"
 
     # 阿克曼车辆参数
     ackermann_wheelbase: float = 2.5  # 轴距（米）
@@ -241,6 +242,9 @@ class PlannerResult:
     gcs_sample_times: Optional[np.ndarray] = None  # 采样时间点
     gcs_mode: str = ""  # GCS模式：'ackermann', '2d'
     gcs_solve_time: float = 0.0
+    gcs_curvature_constraint_mode: str = ""
+    gcs_direction_cone_diagnostics: Optional[Dict] = None
+    gcs_fallback_reason: str = ""
     used_gcs: bool = False
     num_obstacles: int = 0
     total_vertices: int = 0

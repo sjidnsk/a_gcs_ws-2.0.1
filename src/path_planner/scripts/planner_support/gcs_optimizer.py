@@ -142,6 +142,7 @@ class GCSOptimizer:
             from ackermann_gcs_pkg.ackermann_data_structures import (
                 VehicleParams,
                 EndpointState,
+                TrajectoryConstraints,
                 BezierConfig
             )
             from ackermann_gcs_pkg.flat_output_mapper import compute_flat_output_mapping
@@ -193,6 +194,17 @@ class GCSOptimizer:
             )
 
             # 设置成本权重
+            curvature_mode = getattr(self.config, 'gcs_curvature_constraint_mode', 'none')
+            constraints = TrajectoryConstraints(
+                max_velocity=vehicle_params.max_velocity,
+                max_acceleration=vehicle_params.max_acceleration,
+                max_curvature=vehicle_params.max_curvature,
+                workspace_regions=regions,
+                enable_curvature_hard_constraint=(curvature_mode == "hard"),
+                min_velocity=getattr(self.config, 'ackermann_v_min', 1.58),
+                curvature_constraint_mode=curvature_mode,
+            )
+
             cost_weights = {
                 "time": self.time_weight,
                 "path_length": self.path_weight,
@@ -208,8 +220,9 @@ class GCSOptimizer:
                 source=source,
                 target=target,
                 workspace_regions=regions,
-                constraints=None,  # 使用默认约束
+                constraints=constraints,
                 cost_weights=cost_weights,
+                reference_path=path,
                 verbose=True
             )
 
@@ -218,6 +231,9 @@ class GCSOptimizer:
                 result.gcs_trajectory = planning_result.trajectory
                 result.used_gcs = True
                 result.gcs_mode = 'ackermann'
+                result.gcs_curvature_constraint_mode = planning_result.curvature_constraint_mode
+                result.gcs_direction_cone_diagnostics = planning_result.direction_cone_diagnostics
+                result.gcs_fallback_reason = planning_result.fallback_reason
 
                 # 使用flat_output_mapper采样轨迹
                 num_samples = 1000
