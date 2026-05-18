@@ -26,13 +26,13 @@ if src_dir not in sys.path:
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
-from typing import Optional, List, Tuple
+from typing import Optional
 
-# from scripts.test_hybrid_astar_gcs_planner import 
-from scripts.hybrid_astar_gcs_planner import (
-    convert_iris_to_hpolyhedron, create_endpoint_state,
+from path_planner.scenario_utils import (
+    convert_iris_to_hpolyhedron,
+    create_endpoint_state,
+    create_test_map,
     plan_path,
-    create_test_map
 )
 from C_space_pkg.se2 import SE2ConfigurationSpace
 
@@ -116,7 +116,7 @@ def visualize_3d_trajectory_interactive(
     
     # 4. IRIS分解
     print("步骤3: IRIS分解...")
-    from path_planner.scripts.hybrid_astar_gcs_planner import HybridAStarGCSPlanner
+    from path_planner import HybridAStarGCSPlanner
 
     planner_config = project_config.planner_config(
         scenario,

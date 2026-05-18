@@ -17,34 +17,19 @@ A*与GCS分层轨迹规划器
 - 详细说明见：config/iris/iris_np_config.py
 """
 
-import os
-import sys
 import warnings
 import numpy as np
-from typing import List, Tuple, Optional, Any, Dict
+from typing import List, Tuple, Optional
 
-# 路径设置
-current_dir = os.path.dirname(os.path.abspath(__file__))
-src_dir = os.path.dirname(os.path.dirname(current_dir))
-if src_dir not in sys.path:
-    sys.path.insert(0, src_dir)
-
-# 确保当前目录在路径中（用于导入decomposition子模块）
-if current_dir not in sys.path:
-    sys.path.insert(0, current_dir)
-
-from C_space_pkg.partial_corridor import CorridorGenerator, CorridorConfig, CorridorResult
+from C_space_pkg.partial_corridor import CorridorGenerator, CorridorConfig
 from C_space_pkg.se2 import SE2ConfigurationSpace, RobotShape
 from C_space_pkg.obstacles_optimized import binary_map_to_convex_obstacles_optimized
-from A_pkg.A_star_fast_optimized import FastSE2AStarPlanner, PlannerConfig as AStarPlannerConfig
 
-# 导入规划器支持模块（使用绝对导入）
-from planner_support import (
+from .support import (
     PerformanceMonitor,
     PlannerConfig,
     PlannerResult,
-    TrajectoryVisualizer,
-    GCSOptimizer
+    GCSOptimizer,
 )
 
 # IRIS模块导入（支持np和zo模式）
@@ -129,11 +114,19 @@ class HybridAStarGCSPlanner:
         if self.config.use_iris:
             self._create_iris_generators()
         
-        # 创建可视化器
-        self.visualizer = TrajectoryVisualizer(c_space, self.config)
+        # 创建可视化器（按需导入，避免无可视化场景加载图形/Drake依赖）
+        self.visualizer = (
+            self._create_visualizer() if self.config.enable_visualization else None
+        )
         
         # 创建GCS优化器
         self.gcs_optimizer = GCSOptimizer(self.config, self.perf_monitor)
+
+    def _create_visualizer(self):
+        """Create the trajectory visualizer only when visualization is enabled."""
+        from visualization.trajectory.trajectory_visualizer import TrajectoryVisualizer
+
+        return TrajectoryVisualizer(self.c_space, self.config)
     
     def _select_iris_mode(self):
         """选择IRIS模式（仅支持np模式）"""
@@ -302,7 +295,7 @@ class HybridAStarGCSPlanner:
             self.gcs_optimizer.optimize(result, path)
         
         # Step 4: 可视化
-        if self.config.enable_visualization:
+        if self.config.enable_visualization and self.visualizer is not None:
             vis_metrics = self.perf_monitor.start("可视化")
             self.visualizer.visualize(result, path)
             vis_metrics = self.perf_monitor.end("可视化")

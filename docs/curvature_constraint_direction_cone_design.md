@@ -1125,8 +1125,8 @@ GCS 选择换挡点
   - 验收：`direction_cone` 单次规划只执行一次 GCS 求解流程，不做 h_bar_prime 迭代修正。
 
 - [ ] **任务 4.3：端到端编排传递粗路径**
-  - 修改：`src/path_planner/scripts/planner_support/gcs_optimizer.py`
-  - 修改：`src/path_planner/scripts/hybrid_astar_gcs_planner.py`
+  - 修改：`src/path_planner/support/gcs_optimizer.py`
+  - 修改：`src/path_planner/planner.py`
   - 动作：将 Hybrid A* 输出的 `path` 作为 `reference_path` 传给 `AckermannGCSPlanner.plan_trajectory(...)`。
   - 验收：`path_planner` 编排层能够开启 `"direction_cone"` 模式，不丢失粗路径局部方向信息。
 
@@ -1181,8 +1181,8 @@ GCS 选择换挡点
 ### 21.8 阶段 7：固定 gear 倒车支持
 
 - [ ] **任务 7.1：保留粗路径 gear 数据**
-  - 修改：`src/path_planner/scripts/planner_support/gcs_optimizer.py`
-  - 修改：`src/path_planner/scripts/hybrid_astar_gcs_planner.py`
+  - 修改：`src/path_planner/support/gcs_optimizer.py`
+  - 修改：`src/path_planner/planner.py`
   - 动作：把 A* motion primitive 的 `gear` 保留到 `reference_path` 或单独的 `reference_gears`。
   - 验收：同一 GCS 段内不跨 gear change；跨 gear change 时切段或标记不可用。
 

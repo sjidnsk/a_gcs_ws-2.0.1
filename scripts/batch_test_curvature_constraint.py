@@ -25,10 +25,11 @@ if src_dir not in sys.path:
 import matplotlib
 matplotlib.use('Agg')  # 非交互式后端，不显示窗口
 
-from scripts.hybrid_astar_gcs_planner import (
+from path_planner.scenario_utils import (
     convert_iris_to_hpolyhedron,
     create_endpoint_state,
-    plan_path, create_test_map
+    create_test_map,
+    plan_path,
 )
 from C_space_pkg.se2 import SE2ConfigurationSpace
 from config.project import ProjectConfig, load_project_config
@@ -66,7 +67,7 @@ def run_single_test(run_id: int, scenario: str, project_config: ProjectConfig):
             return result
 
         # 3. IRIS分解
-        from path_planner.scripts.hybrid_astar_gcs_planner import HybridAStarGCSPlanner
+        from path_planner import HybridAStarGCSPlanner
 
         planner_config = project_config.planner_config(
             scenario,

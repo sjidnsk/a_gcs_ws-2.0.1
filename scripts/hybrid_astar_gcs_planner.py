@@ -7,24 +7,13 @@ HybridAStarGCSPlanner 测试脚本
 import os
 import sys
 import numpy as np
-from typing import List, Tuple, Optional
+from typing import Optional, Tuple
 import argparse
-from functools import lru_cache
-
-try:
-    from pydrake.geometry.optimization import HPolyhedron
-    from pydrake.trajectories import BsplineTrajectory
-    DRAKE_AVAILABLE = True
-except ImportError:
-    DRAKE_AVAILABLE = False
-    HPolyhedron = None
-    BsplineTrajectory = None
 
 # 路径设置
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 src_dir = os.path.join(project_root, 'src')
-scripts_dir = os.path.join(src_dir, 'path_planner', 'scripts')
 
 # 添加路径
 # 移除空字符串(如果存在)
@@ -40,78 +29,16 @@ if project_root in sys.path:
     sys.path.remove(project_root)
 sys.path.insert(1, project_root)
 
-if scripts_dir not in sys.path:
-    sys.path.insert(2, scripts_dir)
-
-# 添加ackermann_gcs_pkg路径(在src_dir之后)
-ackermann_pkg_dir = os.path.join(src_dir, 'ackermann_gcs_pkg')
-if ackermann_pkg_dir in sys.path:
-    sys.path.remove(ackermann_pkg_dir)
-sys.path.insert(3, ackermann_pkg_dir)
-
-from C_space_pkg.se2 import SE2ConfigurationSpace, create_rectangle_robot
-from A_pkg.A_star_fast_optimized import FastSE2AStarPlanner
-from ackermann_gcs_pkg.ackermann_data_structures import (
-    VehicleParams,
-    EndpointState,
-    PlanningResult
-)
+from C_space_pkg.se2 import SE2ConfigurationSpace
+from ackermann_gcs_pkg.ackermann_data_structures import PlanningResult
 from config.project import ProjectConfig, VALID_PLANNER_MODES, load_project_config
-
-
-@lru_cache(maxsize=1)
-def _default_project_config() -> ProjectConfig:
-    """Load the default YAML config lazily for programmatic callers."""
-    return load_project_config()
-
-# ==================== 阿克曼GCS辅助函数 ====================
-
-def create_endpoint_state(position: Tuple[float, float],
-                         heading: float,
-                         velocity: Optional[float] = None) -> EndpointState:
-    """
-    创建端点状态
-
-    Args:
-        position: 位置 (x, y)
-        heading: 航向角（弧度）
-        velocity: 速度（米/秒），默认None（不约束速度）
-
-    Returns:
-        EndpointState对象
-    """
-    return EndpointState(
-        position=np.array(position),
-        heading=heading,
-        velocity=velocity
-    )
-
-
-def convert_iris_to_hpolyhedron(iris_regions: List) -> List[HPolyhedron]:
-    """
-    将IRIS区域转换为HPolyhedron
-
-    Args:
-        iris_regions: IRIS区域列表(支持iris_np和iriszo)
-
-    Returns:
-        HPolyhedron列表
-    """
-    workspace_regions = []
-    for region in iris_regions:
-        # 检查是否是iriszo的区域(有polyhedron属性)
-        if hasattr(region, 'polyhedron'):
-            # iriszo区域:直接使用polyhedron
-            hpolyhedron = region.polyhedron
-        elif hasattr(region, 'A') and hasattr(region, 'b'):
-            # iris_np区域:从A和b构造HPolyhedron
-            A = region.A
-            b = region.b
-            hpolyhedron = HPolyhedron(A, b)
-        else:
-            raise ValueError(f"未知的IRIS区域类型: {type(region)}")
-        workspace_regions.append(hpolyhedron)
-    return workspace_regions
+from path_planner.scenario_utils import (
+    convert_iris_to_hpolyhedron,
+    create_endpoint_state,
+    create_test_map,
+    default_project_config,
+    plan_path,
+)
 
 
 def print_ackermann_result(result: PlanningResult):
@@ -158,37 +85,6 @@ def print_ackermann_result(result: PlanningResult):
     print(f"{'='*60}\n")
 
 
-def visualize_ackermann_trajectory(trajectory: BsplineTrajectory,
-                                  source: EndpointState,
-                                  target: EndpointState,
-                                  workspace_regions: List[HPolyhedron],
-                                  vehicle_params: VehicleParams,
-                                  output_path: str):
-    """
-    可视化阿克曼GCS轨迹
-
-    Args:
-        trajectory: 轨迹
-        source: 起点状态
-        target: 终点状态
-        workspace_regions: 工作空间区域
-        vehicle_params: 车辆参数
-        output_path: 输出路径
-    """
-    from visualization.ackermann import visualize_ackermann_gcs_enhanced
-
-    visualize_ackermann_gcs_enhanced(
-        trajectory=trajectory,
-        vehicle_params=vehicle_params,
-        workspace_regions=workspace_regions,
-        source=source,
-        target=target,
-        save_path=output_path
-    )
-
-    print(f"可视化已保存到: {output_path}")
-
-
 def run_ackermann_gcs_test(scenario: str,
                           obstacle_map: np.ndarray,
                           start: Tuple,
@@ -208,10 +104,10 @@ def run_ackermann_gcs_test(scenario: str,
     print(f"\n{'='*60}")
     print(f"测试场景: {scenario}, 模式: ackermann_gcs")
     print(f"{'='*60}")
-    project_config = project_config or _default_project_config()
+    project_config = project_config or default_project_config()
 
     try:
-        from path_planner.scripts.hybrid_astar_gcs_planner import HybridAStarGCSPlanner
+        from path_planner import HybridAStarGCSPlanner
         from ackermann_gcs_pkg.ackermann_gcs_planner import AckermannGCSPlanner
 
         # 步骤1：创建配置空间
@@ -347,228 +243,6 @@ def run_ackermann_gcs_test(scenario: str,
         traceback.print_exc()
 
 
-def create_test_map(map_size: int = 200, scenario: str = 'basic') -> np.ndarray:
-    """创建测试地图"""
-    obstacle_map = np.zeros((map_size, map_size), dtype=np.uint8)
-    
-    if scenario == 'basic':
-        obstacle_map[40:80, 60:100] = 1
-        obstacle_map[120:160, 40:80] = 1
-        obstacle_map[100:140, 120:160] = 1
-        obstacle_map[60:100, 140:160] = 1
-        obstacle_map[80:100, 160:200] = 1
-        for i in range(map_size):
-            for j in range(map_size):
-                if (i - 150)**2 + (j - 150)**2 < 25**2:
-                    obstacle_map[i, j] = 1
-    
-    elif scenario == 'minimal':
-        # 极简场景：完全开阔的空间，只有边界
-        # 100x100地图，起点(5,5)到终点(8,5)，直线距离3米
-        obstacle_map[0:10, :] = 1  # 上边界
-        obstacle_map[90:100, :] = 1  # 下边界
-        obstacle_map[:, 0:10] = 1  # 左边界
-        obstacle_map[:, 90:100] = 1  # 右边界
-    
-    elif scenario == 'simple_straight':
-        # 简单直线场景：开阔空间，少量障碍物
-        # 在路径上方和下方放置一些障碍物，确保有足够的通行空间
-        obstacle_map[30:50, 80:120] = 1  # 上方障碍物
-        obstacle_map[150:170, 80:120] = 1  # 下方障碍物
-        # 边界障碍物
-        obstacle_map[0:20, :] = 1
-        obstacle_map[180:200, :] = 1
-        obstacle_map[:, 0:20] = 1
-        obstacle_map[:, 180:200] = 1
-    
-    elif scenario == 'sharp_turn':
-        # 急转弯场景：需要车辆进行较大角度的转弯
-        # 创建一个L形通道
-        obstacle_map[0:80, 0:80] = 1  # 左上角障碍物
-        obstacle_map[120:200, 120:200] = 1  # 右下角障碍物
-        # 边界
-        obstacle_map[0:20, :] = 1
-        obstacle_map[180:200, :] = 1
-        obstacle_map[:, 0:20] = 1
-        obstacle_map[:, 180:200] = 1
-    
-    elif scenario == 'corridor_passage':
-        # 走廊通道场景：需要穿过障碍物之间的通道
-        # 创建简单的障碍物布局
-        obstacle_map[40:80, 70:90] = 1  # 上方障碍物
-        obstacle_map[120:160, 70:90] = 1  # 下方障碍物
-        # 边界
-        obstacle_map[0:20, :] = 1
-        obstacle_map[180:200, :] = 1
-        obstacle_map[:, 0:20] = 1
-        obstacle_map[:, 180:200] = 1
-    
-    elif scenario == 'slalom':
-        # 绕桩场景：需要车辆绕过几个障碍物
-        # 创建简单的交错障碍物
-        obstacle_map[60:90, 80:110] = 1  # 第一个障碍物
-        obstacle_map[120:150, 130:160] = 1  # 第二个障碍物
-        obstacle_map[180:210, 80:110] = 1  # 第三个障碍物
-        # 边界
-        obstacle_map[0:20, :] = 1
-        obstacle_map[230:250, :] = 1
-        obstacle_map[:, 0:20] = 1
-        obstacle_map[:, 230:250] = 1
-    
-    elif scenario == 'maze_navigation':
-        # 迷宫导航场景：中等复杂度的障碍物布局
-        # 外墙
-        obstacle_map[0:20, :] = 1
-        obstacle_map[280:300, :] = 1
-        obstacle_map[:, 0:20] = 1
-        obstacle_map[:, 280:300] = 1
-        
-        # 简单的内部障碍物
-        obstacle_map[80:120, 80:120] = 1
-        obstacle_map[160:200, 160:200] = 1
-        obstacle_map[80:120, 180:220] = 1
-    
-    elif scenario == 'gentle_turn':
-        # 温和转弯场景：提供足够的转弯空间
-        # 在转弯路径外侧放置障碍物
-        obstacle_map[30:60, 130:180] = 1  # 右上角障碍物
-        obstacle_map[150:180, 30:80] = 1  # 左下角障碍物
-        # 边界障碍物
-        obstacle_map[0:20, :] = 1
-        obstacle_map[180:200, :] = 1
-        obstacle_map[:, 0:20] = 1
-        obstacle_map[:, 180:200] = 1
-    
-    elif scenario == 'narrow':
-        obstacle_map[0:100, :] = 1
-        obstacle_map[150:250, :] = 1
-    
-    elif scenario == 'complex':
-        # 复杂地形：多个不规则障碍物、窄通道、迷宫式布局
-        # 1. 大型矩形障碍物群
-        obstacle_map[50:150, 30:80] = 1
-        obstacle_map[180:280, 120:170] = 1
-        obstacle_map[300:400, 50:100] = 1
-        obstacle_map[100:200, 350:400] = 1
-        obstacle_map[350:450, 300:350] = 1
-        
-        # # 2. 窄通道障碍物
-        # obstacle_map[250:350, 150:200] = 1
-        # obstacle_map[250:350, 250:300] = 1
-        
-        # 3. 对角线障碍物
-        for i in range(50, 150):
-            for j in range(200, 300):
-                if abs(i - j + 150) < 10:
-                    obstacle_map[i, j] = 1
-        
-        # 4. 多个圆形障碍物（模拟陨石坑）
-        circles = [
-            (100, 250, 30),
-            (200, 200, 25),
-            (300, 350, 35),
-            (400, 150, 28),
-            (150, 400, 32),
-            (380, 280, 22),
-            (250, 100, 27),
-            (80, 320, 20),
-            (420, 380, 25),
-            (320, 80, 23)
-        ]
-        for cx, cy, radius in circles:
-            for i in range(max(0, cx-radius), min(map_size, cx+radius)):
-                for j in range(max(0, cy-radius), min(map_size, cy+radius)):
-                    if (i - cx)**2 + (j - cy)**2 < radius**2:
-                        obstacle_map[i, j] = 1
-        
-        # 5. 迷宫式障碍物
-        obstacle_map[200:250, 50:80] = 1
-        obstacle_map[200:250, 100:130] = 1
-        obstacle_map[200:250, 150:180] = 1
-        obstacle_map[200:250, 200:230] = 1
-        obstacle_map[200:250, 250:280] = 1
-        obstacle_map[200:250, 300:330] = 1
-        obstacle_map[200:250, 350:380] = 1
-        obstacle_map[200:250, 400:430] = 1
-        
-        # 6. L形障碍物
-        obstacle_map[50:100, 200:250] = 1
-        obstacle_map[50:150, 200:220] = 1
-        
-        obstacle_map[300:350, 400:450] = 1
-        obstacle_map[300:400, 400:420] = 1
-        
-        # 7. 分散的小障碍物
-        small_obstacles = [
-            (120, 120, 15), (180, 320, 12), (280, 220, 14),
-            (350, 180, 13), (420, 320, 16), (90, 380, 11),
-            (220, 380, 14), (380, 120, 12), (150, 80, 15),
-            (320, 320, 13)
-        ]
-        for cx, cy, radius in small_obstacles:
-            for i in range(max(0, cx-radius), min(map_size, cx+radius)):
-                for j in range(max(0, cy-radius), min(map_size, cy+radius)):
-                    if (i - cx)**2 + (j - cy)**2 < radius**2:
-                        obstacle_map[i, j] = 1
-    
-    elif scenario == 'u_turn':
-        # U型转弯场景：需要机器人进行180度转弯
-        obstacle_map[0:120, 0:150] = 1  # 左侧墙
-        obstacle_map[120:200, 0:45] = 1  # 上方墙
-        obstacle_map[120:200, 105:150] = 1  # 下方墙
-        # 在右侧留出通道（y=45-105），机器人从右侧进入U型区域
-        
-    elif scenario == 's_curve':
-        # S型弯道场景：测试机器人在连续弯道中的路径规划
-        obstacle_map[0:80, 0:150] = 1
-        obstacle_map[120:200, 50:200] = 1
-        obstacle_map[0:80, 150:200] = 1
-        obstacle_map[120:200, 0:50] = 1
-        
-    elif scenario == 'dynamic':
-        # 动态障碍物场景：模拟移动的障碍物
-        obstacle_map[50:100, 50:100] = 1
-        obstacle_map[150:200, 100:150] = 1
-        obstacle_map[100:150, 150:200] = 1
-        
-    elif scenario == 'multi_goal':
-        # 多目标点场景：测试经过多个 waypoints
-        obstacle_map[50:80, 80:120] = 1
-        obstacle_map[120:150, 50:80] = 1
-        obstacle_map[120:150, 120:150] = 1
-        obstacle_map[80:120, 170:200] = 1
-        
-    elif scenario == 'parking':
-        # 泊车场景：模拟倒车入库
-        # 创建一个U型停车位，机器人需要倒车进入
-        obstacle_map[0:40, 0:200] = 1  # 左墙
-        obstacle_map[160:200, 0:200] = 1  # 右墙
-        obstacle_map[0:200, 0:40] = 1  # 顶部墙
-        obstacle_map[0:200, 160:200] = 1  # 底部墙
-        # 停车位隔断（缩小范围，避免与起点碰撞）
-        obstacle_map[70:130, 70:90] = 1
-    
-    return obstacle_map
-
-
-def plan_path(
-    c_space: SE2ConfigurationSpace,
-    start: Tuple,
-    goal: Tuple,
-    project_config: Optional[ProjectConfig] = None,
-) -> Optional[List]:
-    """A*路径规划"""
-    project_config = project_config or _default_project_config()
-    robot = create_rectangle_robot(length=1.5, width=1.0)
-    planner = FastSE2AStarPlanner(
-        c_space=c_space, robot=robot, min_radius=project_config.astar.min_radius,
-        resolution=project_config.astar.resolution,
-        theta_resolution=project_config.astar.theta_resolution,
-        config=project_config.astar_planner_config()
-    )
-    return planner.plan(start, goal)
-
-
 def run_test(scenario: str = 'basic',
              mode: str = 'hybrid_astar_gcs',
              gcs_strategy: str = 'standard',
@@ -585,7 +259,7 @@ def run_test(scenario: str = 'basic',
         gcs_strategy: GCS策略预设（仅hybrid_astar_gcs模式有效）
         gcs_cost: GCS成本预设（仅hybrid_astar_gcs模式有效）
     """
-    project_config = project_config or _default_project_config()
+    project_config = project_config or default_project_config()
     if mode is None:
         mode = project_config.planner_mode
     if gcs_strategy is None:
@@ -610,7 +284,7 @@ def run_test(scenario: str = 'basic',
             project_config=project_config
         )
     else:
-        from path_planner.scripts.hybrid_astar_gcs_planner import HybridAStarGCSPlanner
+        from path_planner import HybridAStarGCSPlanner
 
         # 原有HybridAStarGCS测试流程
         print(f"\n{'='*60}")

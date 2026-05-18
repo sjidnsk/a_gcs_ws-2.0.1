@@ -10,12 +10,11 @@ GCS轨迹优化模块（优化版本）
 2. 向量化计算：使用numpy替代循环
 3. 缓存机制：避免重复计算
 4. 并行处理：支持多区域并行转换
-5. 内存复用：减少数组分配
+5. 配置缓存：减少重复属性读取
 """
 import warnings
 import numpy as np
-from typing import List, Tuple, Optional, Any
-
+from typing import List, Tuple
 
 from config.planner import PlannerResult
 
@@ -37,9 +36,6 @@ class GCSOptimizer:
         # 缓存常用配置参数
         self._cache_common_params()
         
-        # 预分配数组（避免重复分配）
-        self._preallocate_arrays()
-    
     def _cache_common_params(self):
         """缓存常用配置参数，减少属性访问开销"""
         self.gcs_order = self.config.gcs_order
@@ -50,11 +46,6 @@ class GCSOptimizer:
         self.has_energy_cost = self.energy_weight > 0
         self.zero_velocity_at_boundaries = self.config.gcs_zero_velocity_at_boundaries
         self.min_time_derivative = self.config.gcs_min_time_derivative
-    
-    def _preallocate_arrays(self):
-        """预分配常用数组，减少运行时内存分配"""
-        # 预分配2D路点数组
-        self._waypoints_2d_buffer = np.zeros((2, 100))
     
     def optimize(self, result: PlannerResult,
                 path: List[Tuple[float, float, float]]) -> bool:

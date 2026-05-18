@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 # 仅在类型检查时导入，避免循环依赖
 if TYPE_CHECKING:
-    from path_planner.scripts.planner_support.performance_monitor import PerformanceMetrics
+    from path_planner.support.performance_monitor import PerformanceMetrics
 
 # 导入优化配置
 try:
