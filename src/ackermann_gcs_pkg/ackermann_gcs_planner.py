@@ -275,6 +275,9 @@ class AckermannGCSPlanner:
                 }
                 if verbose:
                     print("✓ 方向锥曲率约束添加完成")
+                    skipped_risk_edges = direction_cone_diagnostics.get(
+                        "skipped_risk_edges", 0
+                    )
                     print(
                         "  edge数: "
                         f"{direction_cone_diagnostics['constrained_edges']}, "
@@ -285,7 +288,9 @@ class AckermannGCSPlanner:
                         f"[{direction_cone_diagnostics['theta_min_deg']:.2f}°, "
                         f"{direction_cone_diagnostics['theta_max_deg']:.2f}°], "
                         "高风险edge: "
-                        f"{direction_cone_diagnostics['risk_edge_count']}"
+                        f"{direction_cone_diagnostics['risk_edge_count']}, "
+                        "跳过风险edge: "
+                        f"{skipped_risk_edges}"
                     )
             except Exception as e:
                 fallback_reason = f"direction_cone_fallback_to_hard: {e}"

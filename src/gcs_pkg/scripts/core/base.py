@@ -818,7 +818,11 @@ class BaseGCS:
             results_dict["rounded_results"] = rounded_results
             results_dict["max_rounded_solver_time"] =  max_rounded_solver_time
             results_dict["total_rounded_solver_time"] = total_rounded_solver_time
-            results_dict["rounded_cost"] = best_result.get_optimal_cost()
+            results_dict["rounded_cost"] = (
+                best_result.get_optimal_cost()
+                if best_result is not None
+                else np.inf
+            )
             # 保存所有候选路径及其求解结果，供上层按约束违反量筛选
             results_dict["all_rounded_paths_results"] = list(
                 zip(active_edges, rounded_results)

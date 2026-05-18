@@ -243,10 +243,10 @@ class TrajectoryVisualizer:
         seed_points = []
         
         if result.used_iris:
-            iris_result = result.iris_np_result or result.iris_np2_zo_result
+            iris_result = self._get_iris_result(result)
             if iris_result:
                 for r in iris_result.regions:
-                    vertices = r.get_vertices_ordered() if hasattr(r, 'get_vertices_ordered') else r.vertices
+                    vertices = self._extract_region_vertices(r)
                     regions_to_draw.append((vertices, 'blue'))
                     if hasattr(r, 'seed_point'):
                         seed_points.append(r.seed_point)
@@ -296,6 +296,49 @@ class TrajectoryVisualizer:
         ax.legend(loc='upper left', fontsize=12, framealpha=0.9)
         ax.set_aspect('equal')
         ax.grid(True, alpha=0.3)
+
+    @staticmethod
+    def _get_iris_result(result):
+        """获取当前规划结果中的IRIS区域结果。"""
+        return (
+            getattr(result, 'iris_zo_result', None)
+            or getattr(result, 'iris_np_result', None)
+        )
+
+    @staticmethod
+    def _extract_region_vertices(region):
+        """提取区域顶点，兼容 IrisNpRegion、IrisZoRegion 和 HPolyhedron。"""
+        vertices = None
+        if hasattr(region, 'get_vertices_ordered'):
+            vertices = region.get_vertices_ordered()
+        elif hasattr(region, 'vertices'):
+            vertices = region.vertices
+
+        if vertices is not None and len(vertices) > 0:
+            return TrajectoryVisualizer._order_vertices_2d(vertices)
+
+        polyhedron = getattr(region, 'polyhedron', region)
+        try:
+            from pydrake.geometry.optimization import VPolytope
+            vertices = VPolytope(polyhedron).vertices().T
+            return TrajectoryVisualizer._order_vertices_2d(vertices)
+        except Exception:
+            return np.array([])
+
+    @staticmethod
+    def _order_vertices_2d(vertices):
+        """按角度排序二维多边形顶点，保持与 visualize_3d_trajectory.py 一致。"""
+        vertices = np.asarray(vertices)
+        if vertices.ndim != 2 or len(vertices) < 3 or vertices.shape[1] != 2:
+            return vertices
+
+        center = np.mean(vertices, axis=0)
+        angles = np.arctan2(
+            vertices[:, 1] - center[1],
+            vertices[:, 0] - center[0]
+        )
+        sorted_indices = np.argsort(angles)
+        return vertices[sorted_indices]
     
     def _plot_2d_topview(self, ax, result, original_path: List[Tuple[float, float, float]], extent):
         """绘制2D俯视图（带theta范围标注）"""

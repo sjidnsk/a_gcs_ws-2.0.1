@@ -33,6 +33,9 @@ from scripts.hybrid_astar_gcs_planner import (
     SCENARIO_CONFIGS, 
     convert_iris_to_hpolyhedron, create_endpoint_state,
     DEFAULT_VEHICLE_PARAMS,
+    CURVATURE_CONSTRAINT_MODE,
+    DIRECTION_CONE_PROFILE,
+    get_direction_cone_profile,
     plan_path,
     create_test_map
 )
@@ -55,7 +58,7 @@ from config.visualization import ControlPointConfig
 
 
 def visualize_3d_trajectory_interactive(
-    scenario: str = 'narrow',
+    scenario: str = 'basic',
     elev: float = 25.0,
     azim: float = 45.0,
     save_path: Optional[str] = None,
@@ -64,7 +67,9 @@ def visualize_3d_trajectory_interactive(
     show_control_points: bool = True,
     control_point_size: Optional[int] = None,
     control_point_color: Optional[str] = None,
-    control_point_marker: Optional[str] = None
+    control_point_marker: Optional[str] = None,
+    curvature_constraint_mode: Optional[str] = None,
+    direction_cone_profile: Optional[str] = None
 ):
     """
     交互式3D轨迹可视化
@@ -80,9 +85,22 @@ def visualize_3d_trajectory_interactive(
         control_point_size: 控制点标记大小（默认60）
         control_point_color: 控制点颜色（默认'orange'）
         control_point_marker: 控制点标记形状（默认'D'菱形）
+        curvature_constraint_mode: 曲率约束模式，默认使用 hybrid_astar_gcs_planner.py 中的配置
+        direction_cone_profile: direction_cone 参数预设，默认使用 hybrid_astar_gcs_planner.py 中的配置
     """
+    curvature_mode = curvature_constraint_mode or CURVATURE_CONSTRAINT_MODE
+    active_direction_cone_profile = direction_cone_profile or DIRECTION_CONE_PROFILE
+    if curvature_mode not in ("none", "hard", "direction_cone"):
+        raise ValueError(
+            "curvature_constraint_mode must be one of "
+            f"'none', 'hard', 'direction_cone', got {curvature_mode!r}"
+        )
+
     print("=" * 60)
     print(f"3D配置空间轨迹可视化 - 场景: {scenario}")
+    print(f"曲率约束模式: {curvature_mode}")
+    if curvature_mode == "direction_cone":
+        print(f"方向锥参数预设: {active_direction_cone_profile}")
     print("=" * 60)
     
     # 1. 获取场景配置
@@ -132,16 +150,26 @@ def visualize_3d_trajectory_interactive(
     vehicle_params = DEFAULT_VEHICLE_PARAMS
     source = create_endpoint_state(start[:2], start[2])
     target = create_endpoint_state(goal[:2], goal[2])
+    direction_cone_overrides = (
+        get_direction_cone_profile(active_direction_cone_profile)
+        if curvature_mode == "direction_cone"
+        else {}
+    )
+    if direction_cone_overrides:
+        print("使用 direction_cone 参数预设覆盖:")
+        for key, value in direction_cone_overrides.items():
+            print(f"  {key}: {value}")
     
-    # 构建轨迹约束（启用曲率硬约束）
+    # 构建轨迹约束；direction_cone 模式需要后续传入 reference_path
     constraints = TrajectoryConstraints(
         max_velocity=vehicle_params.max_velocity,
         max_acceleration=vehicle_params.max_acceleration,
         max_curvature=vehicle_params.max_curvature,
         workspace_regions=workspace_regions,
-        enable_curvature_hard_constraint=True,
-        min_velocity=3.0,  # 提高速度下界以收紧曲率约束
-        curvature_constraint_mode="hard",
+        enable_curvature_hard_constraint=(curvature_mode == "hard"),
+        min_velocity=3.0,
+        curvature_constraint_mode=curvature_mode,
+        **direction_cone_overrides,
     )
     
     ackermann_planner = AckermannGCSPlanner(
@@ -163,6 +191,7 @@ def visualize_3d_trajectory_interactive(
             "regularization_h": 2.0,
             "h_ref": 0.08,
         },
+        reference_path=path,
         verbose=True  # 启用详细输出，显示约束信息
     )
     
@@ -171,6 +200,31 @@ def visualize_3d_trajectory_interactive(
         return
     
     print(f"✓ 轨迹规划成功，求解时间: {planning_result.solve_time:.2f}s")
+    actual_curvature_mode = planning_result.curvature_constraint_mode or curvature_mode
+    curvature_label = curvature_mode
+    if actual_curvature_mode != curvature_mode:
+        curvature_label = f"{curvature_mode}_fallback_{actual_curvature_mode}"
+        print(
+            "  fallback: "
+            f"{curvature_mode} -> {actual_curvature_mode}"
+            f" ({planning_result.fallback_reason})"
+        )
+    if (
+        curvature_mode == "direction_cone"
+        and active_direction_cone_profile != "default"
+    ):
+        curvature_label = f"{curvature_label}_{active_direction_cone_profile}"
+    if planning_result.direction_cone_diagnostics:
+        diagnostics = planning_result.direction_cone_diagnostics
+        print(
+            "  direction_cone: "
+            f"edges={diagnostics.get('constrained_edges')}, "
+            f"skipped_risk={diagnostics.get('skipped_risk_edges', 0)}, "
+            f"rho=[{diagnostics.get('rho_min', 0.0):.4f}, "
+            f"{diagnostics.get('rho_max', 0.0):.4f}], "
+            f"theta=[{diagnostics.get('theta_min_deg', 0.0):.2f}°, "
+            f"{diagnostics.get('theta_max_deg', 0.0):.2f}°]"
+        )
     
     # 6. 提取控制点（如果启用）
     control_point_data = None
@@ -273,7 +327,11 @@ def visualize_3d_trajectory_interactive(
         
         ax_2d.set_xlabel('x (m)', fontsize=12)
         ax_2d.set_ylabel('y (m)', fontsize=12)
-        ax_2d.set_title(f'2D Trajectory View - {scenario}', fontsize=14, fontweight='bold')
+        ax_2d.set_title(
+            f'2D Trajectory View - {scenario} ({curvature_label})',
+            fontsize=14,
+            fontweight='bold'
+        )
         ax_2d.legend(loc='best', fontsize=10)
         ax_2d.grid(True, alpha=0.3)
         ax_2d.axis('equal')
@@ -283,7 +341,7 @@ def visualize_3d_trajectory_interactive(
             # 使用输出管理器生成路径（自动生成时间戳run_id）
             output_manager = VisualizationOutputManager.get_instance()
             save_path_2d = output_manager.generate_output_path(
-                filename=f'2d_trajectory_{scenario}.png',
+                filename=f'2d_trajectory_{scenario}_{curvature_label}.png',
                 dimension='2d'
                 # 不指定run_id，自动生成时间戳
             )
@@ -355,7 +413,7 @@ def visualize_3d_trajectory_interactive(
     # 设置标题
     ax.set_title(
         f'3D Configuration Space Trajectory\n'
-        f'Scenario: {scenario} | Regions: {len(workspace_regions)}',
+        f'Scenario: {scenario} | Curvature: {curvature_label} | Regions: {len(workspace_regions)}',
         fontsize=14, fontweight='bold', pad=20
     )
     
@@ -376,6 +434,7 @@ def visualize_3d_trajectory_interactive(
         f"• Right-drag to pan\n"
         f"\n"
         f"Trajectory Info:\n"
+        f"• curvature: {curvature_label}\n"
         f"• Points: {len(x)}\n"
         f"• x: [{x.min():.2f}, {x.max():.2f}]\n"
         f"• y: [{y.min():.2f}, {y.max():.2f}]\n"
@@ -394,7 +453,7 @@ def visualize_3d_trajectory_interactive(
         # 使用输出管理器生成路径（自动生成时间戳run_id）
         output_manager = VisualizationOutputManager.get_instance()
         save_path = output_manager.generate_output_path(
-            filename=f'3d_trajectory_{scenario}.png',
+            filename=f'3d_trajectory_{scenario}_{curvature_label}.png',
             dimension='3d'
             # 不指定run_id，自动生成时间戳
         )
@@ -430,8 +489,8 @@ def main():
         'scenario', 
         type=str, 
         nargs='?', 
-        default='narrow',
-        help='测试场景名称 (default: narrow)'
+        default='basic',
+        help='测试场景名称 (default: basic)'
     )
     parser.add_argument(
         '--elev', 
@@ -484,6 +543,26 @@ def main():
         default=None,
         help='控制点标记形状（默认D菱形）'
     )
+    parser.add_argument(
+        '--curvature-mode',
+        choices=('none', 'hard', 'direction_cone'),
+        default=None,
+        help=(
+            "曲率约束模式；默认使用 scripts/hybrid_astar_gcs_planner.py "
+            f"中的 CURVATURE_CONSTRAINT_MODE={CURVATURE_CONSTRAINT_MODE!r}"
+        )
+    )
+    parser.add_argument(
+        '--direction-cone-profile',
+        choices=('default', 'loose', 'selective'),
+        default=None,
+        help=(
+            "direction_cone 参数预设；默认使用 "
+            f"scripts/hybrid_astar_gcs_planner.py 中的 DIRECTION_CONE_PROFILE="
+            f"{DIRECTION_CONE_PROFILE!r}。loose 会放宽方向锥角并降低 rho；"
+            "selective 还会跳过方向错配或几何高风险边。"
+        )
+    )
     
     args = parser.parse_args()
     
@@ -498,7 +577,9 @@ def main():
         show_control_points=not args.no_control_points,
         control_point_size=args.control_point_size,
         control_point_color=args.control_point_color,
-        control_point_marker=args.control_point_marker
+        control_point_marker=args.control_point_marker,
+        curvature_constraint_mode=args.curvature_mode,
+        direction_cone_profile=args.direction_cone_profile
     )
 
 

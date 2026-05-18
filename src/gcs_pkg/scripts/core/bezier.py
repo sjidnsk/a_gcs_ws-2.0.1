@@ -1005,7 +1005,9 @@ class BezierGCS(BaseGCS):
         Returns:
             dict: Summary with counts for constrained and skipped edges.
         """
-        params_by_key = self._normalize_directional_edge_params(edge_params)
+        params_by_key, ordered_params = self._normalize_directional_edge_params(
+            edge_params
+        )
         boundary_edge_ids = boundary_edge_ids or set()
 
         u_path_dot = self.u_r_trajectory.MakeDerivative(1).control_points()
@@ -1019,12 +1021,9 @@ class BezierGCS(BaseGCS):
             for expr in u_path_ddot
         ]
 
-        constrained_edges = 0
         skipped_source_edges = 0
         skipped_boundary_edges = 0
-        skipped_missing_params = 0
-        constraints_added = 0
-
+        applicable_edges = []
         for edge in self.gcs.Edges():
             if edge.u() == self.source:
                 skipped_source_edges += 1
@@ -1032,11 +1031,24 @@ class BezierGCS(BaseGCS):
             if self._directional_edge_matches_any(edge, boundary_edge_ids):
                 skipped_boundary_edges += 1
                 continue
+            applicable_edges.append(edge)
 
+        constrained_edges = 0
+        skipped_missing_params = 0
+        constraints_added = 0
+        ordered_fallback_edges = 0
+        # PyDrake may return new Python edge wrappers on each Edges() call.
+        can_use_ordered_fallback = len(ordered_params) == len(applicable_edges)
+
+        for edge_index, edge in enumerate(applicable_edges):
             params = self._directional_params_for_edge(edge, params_by_key)
             if params is None:
-                skipped_missing_params += 1
-                continue
+                if can_use_ordered_fallback:
+                    params = ordered_params[edge_index]
+                    ordered_fallback_edges += 1
+                else:
+                    skipped_missing_params += 1
+                    continue
 
             rows = self._build_directional_curvature_rows(
                 params,
@@ -1063,6 +1075,7 @@ class BezierGCS(BaseGCS):
             "skipped_source_edges": skipped_source_edges,
             "skipped_boundary_edges": skipped_boundary_edges,
             "skipped_missing_params": skipped_missing_params,
+            "ordered_fallback_edges": ordered_fallback_edges,
             "rows_per_edge": 3 * len(dot_coefficients) + 4 * len(ddot_coefficients),
         }
         if verbose:
@@ -1070,7 +1083,8 @@ class BezierGCS(BaseGCS):
                 "Directional curvature constraints: "
                 f"{constraints_added} rows on {constrained_edges} edges "
                 f"(missing params: {skipped_missing_params}, "
-                f"boundary skipped: {skipped_boundary_edges})"
+                f"boundary skipped: {skipped_boundary_edges}, "
+                f"ordered fallback: {ordered_fallback_edges})"
             )
         return summary
 
@@ -1105,16 +1119,28 @@ class BezierGCS(BaseGCS):
 
     @staticmethod
     def _normalize_directional_edge_params(edge_params):
-        if isinstance(edge_params, dict):
-            params_iter = edge_params.items()
-            return {
-                key: value
-                for key, value in params_iter
-            }
         params_by_key = {}
+        ordered_params = []
+        seen_param_ids = set()
+
+        def add_param(key, value):
+            params_by_key[key] = value
+            param_edge_id = getattr(value, "edge_id", None)
+            if param_edge_id is not None:
+                params_by_key.setdefault(param_edge_id, value)
+            value_id = id(value)
+            if value_id not in seen_param_ids:
+                ordered_params.append(value)
+                seen_param_ids.add(value_id)
+
+        if isinstance(edge_params, dict):
+            for key, value in edge_params.items():
+                add_param(key, value)
+            return params_by_key, ordered_params
+
         for params in edge_params:
-            params_by_key[getattr(params, "edge_id")] = params
-        return params_by_key
+            add_param(getattr(params, "edge_id"), params)
+        return params_by_key, ordered_params
 
     @staticmethod
     def _directional_edge_keys(edge):

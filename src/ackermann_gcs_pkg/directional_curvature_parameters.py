@@ -313,6 +313,9 @@ class DirectionalCurvatureParameterBuilder:
         self.rho_warning_ratio = float(
             constraints.direction_cone_rho_warning_ratio
         )
+        self.skip_risk_flags = set(
+            getattr(constraints, "direction_cone_skip_risk_flags", ())
+        )
         self.support_cache = support_cache if support_cache is not None else {}
         self.last_summary: Dict[str, Any] = {}
 
@@ -333,10 +336,11 @@ class DirectionalCurvatureParameterBuilder:
         )
         boundary_edge_ids = boundary_edge_ids or set()
         params_by_edge: Dict[Any, DirectionalCurvatureSegmentParams] = {}
+        skipped_risk_edges = 0
 
         if edges is None:
             for region_idx in range(len(regions)):
-                params_by_edge[region_idx] = self._build_params(
+                params = self._build_params(
                     edge_id=region_idx,
                     region_idx=region_idx,
                     next_region_idx=region_idx + 1
@@ -346,6 +350,10 @@ class DirectionalCurvatureParameterBuilder:
                     processed=processed,
                     edge_reference=None,
                 )
+                if self._should_skip_params(params):
+                    skipped_risk_edges += 1
+                    continue
+                params_by_edge[region_idx] = params
         else:
             for edge in edges:
                 if _edge_touches_source(edge):
@@ -356,7 +364,7 @@ class DirectionalCurvatureParameterBuilder:
                 if region_idx is None or not (0 <= region_idx < len(regions)):
                     continue
                 edge_id = id(edge)
-                params_by_edge[edge_id] = self._build_params(
+                params = self._build_params(
                     edge_id=edge_id,
                     region_idx=region_idx,
                     next_region_idx=_edge_v_region_index(edge),
@@ -364,11 +372,20 @@ class DirectionalCurvatureParameterBuilder:
                     processed=processed,
                     edge_reference=_lookup_edge_reference(edge, edge_reference_map),
                 )
+                if self._should_skip_params(params):
+                    skipped_risk_edges += 1
+                    continue
+                params_by_edge[edge_id] = params
 
         if not params_by_edge:
             raise ValueError("no direction-cone parameters could be built")
         self.last_summary = self._summarize(params_by_edge)
+        self.last_summary["skipped_risk_edges"] = skipped_risk_edges
+        self.last_summary["skip_risk_flags"] = sorted(self.skip_risk_flags)
         return params_by_edge
+
+    def _should_skip_params(self, params: DirectionalCurvatureSegmentParams) -> bool:
+        return bool(self.skip_risk_flags.intersection(params.risk_flags))
 
     def _build_params(
         self,

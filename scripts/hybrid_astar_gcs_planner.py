@@ -20,7 +20,7 @@ except ImportError:
 
 # 路径设置
 current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(os.path.dirname(current_dir))  # tests/unit -> tests -> project_root
+project_root = os.path.dirname(current_dir)
 src_dir = os.path.join(project_root, 'src')
 scripts_dir = os.path.join(src_dir, 'path_planner', 'scripts')
 
@@ -29,19 +29,23 @@ scripts_dir = os.path.join(src_dir, 'path_planner', 'scripts')
 if '' in sys.path:
     sys.path.remove('')
 
-# 确保src_dir在最前面,这样新的visualization包会被优先导入
+# 确保当前仓库的src_dir在最前面,这样不会误导入其他工作区的同名包
 if src_dir in sys.path:
     sys.path.remove(src_dir)
 sys.path.insert(0, src_dir)
 
+if project_root in sys.path:
+    sys.path.remove(project_root)
+sys.path.insert(1, project_root)
+
 if scripts_dir not in sys.path:
-    sys.path.insert(1, scripts_dir)
+    sys.path.insert(2, scripts_dir)
 
 # 添加ackermann_gcs_pkg路径(在src_dir之后)
 ackermann_pkg_dir = os.path.join(src_dir, 'ackermann_gcs_pkg')
 if ackermann_pkg_dir in sys.path:
     sys.path.remove(ackermann_pkg_dir)
-sys.path.insert(2, ackermann_pkg_dir)
+sys.path.insert(3, ackermann_pkg_dir)
 
 from C_space_pkg.se2 import SE2ConfigurationSpace, create_rectangle_robot
 from A_pkg.A_star_fast_optimized import FastSE2AStarPlanner, PlannerConfig as AStarPlannerConfig
@@ -71,7 +75,46 @@ DEFAULT_VEHICLE_PARAMS = VehicleParams(
     max_velocity=10.0,                # 最大速度（米/秒）
     max_acceleration=8.0              # 最大加速度（米/秒²）
 )
-CURVATURE_CONSTRAINT_MODE = "none"  # "none", "hard", or "direction_cone"
+CURVATURE_CONSTRAINT_MODE = "direction_cone"  # "none", "hard", or "direction_cone"
+DIRECTION_CONE_PROFILE = "selective"  # "default", "loose", or "selective"
+
+
+def get_direction_cone_profile(profile: str) -> dict:
+    """返回 direction_cone 参数预设。"""
+    loose_profile = {
+        "direction_cone_alpha": 0.45,
+        "direction_cone_beta": 0.55,
+        "direction_cone_gamma": 0.45,
+        "direction_cone_theta_min_deg": 45.0,
+        "direction_cone_theta_abs_max_deg": 80.0,
+        "direction_cone_theta_margin_deg": 25.0,
+        "direction_cone_width_mu": 3.0,
+        "direction_cone_rho_warning_ratio": 0.10,
+    }
+    profiles = {
+        "default": {},
+        # 更宽的方向锥 + 更小的前进投影下界，用于测试轨迹不必紧贴 A* 切向。
+        "loose": loose_profile,
+        # 只对和参考方向一致、几何条件可信的边加 direction_cone。
+        "selective": {
+            **loose_profile,
+            "direction_cone_skip_risk_flags": (
+                "direction_mismatch",
+                "parallel_width_degenerate",
+                "parallel_width_small",
+                "path_projection_degenerate",
+                "overlap_infeasible",
+                "overlap_unavailable",
+                "theta_width_below_min",
+            ),
+        },
+    }
+    if profile not in profiles:
+        raise ValueError(
+            f"unknown direction cone profile {profile!r}; "
+            f"available: {', '.join(profiles)}"
+        )
+    return dict(profiles[profile])
 
 # 场景配置字典
 SCENARIO_CONFIGS = {
@@ -333,8 +376,11 @@ def run_ackermann_gcs_test(scenario: str,
         if result.num_obstacles == 0:
             raise ValueError("IRIS分解失败，未生成可行区域")
 
-        # 步骤4：转换IRIS区域为HPolyhedron
-        workspace_regions = convert_iris_to_hpolyhedron(result.iris_np_result.regions)
+        # 步骤4：转换IRIS区域为HPolyhedron（与 visualize_3d_trajectory.py 保持一致）
+        iris_result = result.iris_zo_result or result.iris_np_result
+        if not iris_result:
+            raise ValueError("IRIS分解失败，未生成可行区域")
+        workspace_regions = convert_iris_to_hpolyhedron(iris_result.regions)
 
         if not workspace_regions:
             raise ValueError("IRIS区域转换失败")
@@ -345,6 +391,15 @@ def run_ackermann_gcs_test(scenario: str,
         # 步骤6：创建起终点状态
         source = create_endpoint_state(start[:2], start[2])
         target = create_endpoint_state(goal[:2], goal[2])
+        direction_cone_overrides = (
+            get_direction_cone_profile(DIRECTION_CONE_PROFILE)
+            if CURVATURE_CONSTRAINT_MODE == "direction_cone"
+            else {}
+        )
+        if direction_cone_overrides:
+            print(f"使用 direction_cone 参数预设: {DIRECTION_CONE_PROFILE}")
+            for key, value in direction_cone_overrides.items():
+                print(f"  {key}: {value}")
 
         # 步骤7：初始化AckermannGCSPlanner
         ackermann_planner = AckermannGCSPlanner(
@@ -359,8 +414,9 @@ def run_ackermann_gcs_test(scenario: str,
             max_curvature=vehicle_params.max_curvature,
             workspace_regions=workspace_regions,
             enable_curvature_hard_constraint=(CURVATURE_CONSTRAINT_MODE == "hard"),
-            min_velocity=2.0,
+            min_velocity=3.0,
             curvature_constraint_mode=CURVATURE_CONSTRAINT_MODE,
+            **direction_cone_overrides,
         )
 
         planning_result = ackermann_planner.plan_trajectory(
@@ -368,7 +424,15 @@ def run_ackermann_gcs_test(scenario: str,
             target=target,
             workspace_regions=workspace_regions,
             constraints=constraints,
-            cost_weights={"time": 1.0, "path_length": 0.1, "energy": 0.01},
+            cost_weights={
+                "time": 3.0,
+                "path_length": 1.5,
+                "energy": 3.0,
+                "time_derivative_reg": 3.0,
+                "regularization_r": 5.0,
+                "regularization_h": 2.0,
+                "h_ref": 0.08,
+            },
             reference_path=path,
             verbose=True
         )

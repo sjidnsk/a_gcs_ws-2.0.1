@@ -179,6 +179,29 @@ def test_builder_flags_high_risk_when_rho_is_small():
     assert "overlap_unavailable" in params.risk_flags
 
 
+def test_builder_can_skip_configured_risk_flags():
+    constraints = make_constraints(
+        direction_cone_skip_risk_flags=("direction_mismatch",)
+    )
+    builder = DirectionalCurvatureParameterBuilder(
+        constraints=constraints,
+        min_turning_radius=4.0,
+    )
+    regions = [
+        rectangle(0.0, 0.0, width=2.0, height=2.0),
+        rectangle(0.0, 5.0, width=2.0, height=2.0),
+    ]
+
+    params_by_edge = builder.build_for_edges(
+        regions,
+        [(0.0, 0.0, 0.0), (10.0, 0.0, 0.0)],
+    )
+
+    assert set(params_by_edge.keys()) == {1}
+    assert builder.last_summary["skipped_risk_edges"] == 1
+    assert builder.last_summary["skip_risk_flags"] == ["direction_mismatch"]
+
+
 def test_directional_curvature_linear_constraints_have_expected_rows():
     params = DirectionalCurvatureSegmentParams(
         edge_id="edge",

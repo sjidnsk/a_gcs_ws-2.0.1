@@ -179,6 +179,7 @@ class TrajectoryConstraints:
     direction_cone_cache_support_widths: bool = True
     direction_cone_use_vertex_width_when_available: bool = True
     direction_cone_rho_warning_ratio: float = 0.2
+    direction_cone_skip_risk_flags: Tuple[str, ...] = ()
 
     def __post_init__(self):
         """参数验证"""
@@ -255,6 +256,13 @@ class TrajectoryConstraints:
                 "direction_cone_theta_min_deg must be <= "
                 "direction_cone_theta_abs_max_deg"
             )
+        self.direction_cone_skip_risk_flags = tuple(
+            self.direction_cone_skip_risk_flags
+        )
+        if not all(
+            isinstance(flag, str) for flag in self.direction_cone_skip_risk_flags
+        ):
+            raise ValueError("direction_cone_skip_risk_flags must contain strings")
 
     @classmethod
     def fromdict(cls, data: Dict) -> 'TrajectoryConstraints':

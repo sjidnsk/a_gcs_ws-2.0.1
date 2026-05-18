@@ -25,6 +25,7 @@ def test_direction_cone_mode_is_valid():
     assert constraints.direction_cone_alpha == pytest.approx(0.60)
     assert constraints.direction_cone_beta == pytest.approx(0.75)
     assert constraints.direction_cone_theta_min_deg == pytest.approx(25.0)
+    assert constraints.direction_cone_skip_risk_flags == ()
 
 
 @pytest.mark.parametrize(
@@ -57,3 +58,16 @@ def test_direction_cone_rejects_non_positive_coefficients(field, value):
 def test_direction_cone_rejects_invalid_angle_configuration(overrides):
     with pytest.raises(ValueError):
         make_constraints(**overrides)
+
+
+def test_direction_cone_accepts_skip_risk_flags():
+    constraints = make_constraints(
+        direction_cone_skip_risk_flags=["direction_mismatch"]
+    )
+
+    assert constraints.direction_cone_skip_risk_flags == ("direction_mismatch",)
+
+
+def test_direction_cone_rejects_non_string_skip_risk_flags():
+    with pytest.raises(ValueError, match="direction_cone_skip_risk_flags"):
+        make_constraints(direction_cone_skip_risk_flags=("direction_mismatch", 1))
