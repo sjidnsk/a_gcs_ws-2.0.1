@@ -19,6 +19,8 @@ DEFAULT_CONFIG_PATH = os.path.join(CONFIG_ROOT, "experiments", "default.yaml")
 
 VALID_PLANNER_MODES = ("hybrid_astar_gcs", "ackermann_gcs")
 VALID_CURVATURE_MODES = ("none", "hard", "direction_cone")
+VALID_GEAR_STRATEGIES = ("none", "fixed_reference", "layered")
+VALID_REFERENCE_GEAR_SOURCES = ("infer", "astar", "provided")
 
 
 T = TypeVar("T")
@@ -159,6 +161,12 @@ class CostWeightsConfig:
     curvature_squared: float = 0.0
     curvature_derivative: float = 0.0
     curvature_peak: float = 0.0
+    reverse: float = 0.0
+    gear_switch: float = 0.0
+    astar_gear_bias: float = 0.0
+
+    def __post_init__(self) -> None:
+        self.validate()
 
     def to_runtime_dict(self) -> Dict[str, float]:
         data = asdict(self)
@@ -253,6 +261,12 @@ class TrajectoryConstraintConfig:
     h_bar_prime_relax_factor: float = 1.3
     max_h_bar_prime_relax_attempts: int = 3
     h_bar_prime_safety_factor_decay: float = 0.8
+    gear_strategy: str = "none"
+    reference_gear_source: str = "infer"
+    gear_switch_requires_stationary: bool = True
+
+    def __post_init__(self) -> None:
+        self.validate()
 
     def validate(self) -> None:
         if self.min_velocity < 0:
@@ -261,6 +275,16 @@ class TrajectoryConstraintConfig:
             raise ValueError(
                 "ackermann.constraints.curvature_constraint_mode must be one of "
                 f"{VALID_CURVATURE_MODES}, got {self.curvature_constraint_mode!r}"
+            )
+        if self.gear_strategy not in VALID_GEAR_STRATEGIES:
+            raise ValueError(
+                "ackermann.constraints.gear_strategy must be one of "
+                f"{VALID_GEAR_STRATEGIES}, got {self.gear_strategy!r}"
+            )
+        if self.reference_gear_source not in VALID_REFERENCE_GEAR_SOURCES:
+            raise ValueError(
+                "ackermann.constraints.reference_gear_source must be one of "
+                f"{VALID_REFERENCE_GEAR_SOURCES}, got {self.reference_gear_source!r}"
             )
 
 

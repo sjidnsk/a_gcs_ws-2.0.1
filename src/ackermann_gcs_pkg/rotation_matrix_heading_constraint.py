@@ -534,7 +534,8 @@ class HeadingConstraintFactory:
         control_points: List[Tuple[Union[Variable, Expression], Union[Variable, Expression]]],
         variables: List[Variable],
         config: HeadingConstraintConfig,
-        constraint_type: Optional[str] = None
+        constraint_type: Optional[str] = None,
+        direction_gear: int = 1,
     ) -> Tuple[List['LinearEqualityConstraint'], List['LinearConstraint']]:
         """
         创建组合航向角约束（叉积约束 + 点积约束）
@@ -565,9 +566,10 @@ class HeadingConstraintFactory:
             variables
         )
 
-        # 创建点积约束（方向约束）
+        # 创建点积约束（方向约束）。倒车时空间运动方向与车身航向相反。
+        direction_heading = heading_angle if direction_gear >= 0 else heading_angle + np.pi
         direction_constraint_obj = DirectionConstraint(
-            heading_angle,
+            direction_heading,
             epsilon=config.direction_epsilon,
             constraint_type=constraint_type
         )
@@ -585,7 +587,8 @@ class HeadingConstraintFactory:
         control_points: List[Tuple[Union[Variable, Expression], Union[Variable, Expression]]],
         variables: List[Variable],
         config: HeadingConstraintConfig,
-        constraint_type: Optional[str] = None
+        constraint_type: Optional[str] = None,
+        direction_gear: int = 1,
     ) -> List[Union['LinearEqualityConstraint', 'LinearConstraint']]:
         """
         创建航向角约束（统一接口）
@@ -606,7 +609,8 @@ class HeadingConstraintFactory:
         """
         cross_constraints, dot_constraints = \
             HeadingConstraintFactory.create_combined_constraints(
-                heading_angle, control_points, variables, config, constraint_type
+                heading_angle, control_points, variables, config,
+                constraint_type, direction_gear=direction_gear
             )
 
         if config.enable_direction_constraint:
@@ -623,7 +627,8 @@ class HeadingConstraintFactory:
         variables: List[Variable],
         config: HeadingConstraintConfig,
         constraint_type: Optional[str] = None,
-        is_first_pair_degenerate: bool = False
+        is_first_pair_degenerate: bool = False,
+        direction_gear: int = 1,
     ) -> List[Union['LinearEqualityConstraint', 'LinearConstraint']]:
         """
         创建航向角约束（逐对选择性禁用点积约束）
@@ -656,8 +661,9 @@ class HeadingConstraintFactory:
 
         # 创建点积约束对象（如果需要）
         if config.enable_direction_constraint:
+            direction_heading = heading_angle if direction_gear >= 0 else heading_angle + np.pi
             direction_constraint_obj = DirectionConstraint(
-                heading_angle,
+                direction_heading,
                 epsilon=config.direction_epsilon,
                 constraint_type=constraint_type
             )

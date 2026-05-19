@@ -38,6 +38,9 @@ def test_invalid_values_are_rejected():
     with pytest.raises(ValueError, match="curvature_constraint_mode"):
         load_project_config(overrides=["ackermann.constraints.curvature_constraint_mode=banana"])
 
+    with pytest.raises(ValueError, match="gear_strategy"):
+        load_project_config(overrides=["ackermann.constraints.gear_strategy=banana"])
+
     with pytest.raises(ValueError, match="heading_deg"):
         load_project_config(overrides=["scenarios.basic.start.heading_deg=181.0"])
 
@@ -59,6 +62,8 @@ def test_runtime_adapters_create_existing_dataclasses():
     assert vehicle.max_steering_angle == pytest.approx(math.radians(85.0))
     assert bezier.order == 5
     assert constraints.curvature_constraint_mode == "direction_cone"
+    assert constraints.gear_strategy == "none"
     assert constraints.min_velocity == pytest.approx(3.0)
+    assert config.cost_weights()["reverse"] == pytest.approx(0.0)
     assert planner_config.corridor_width == pytest.approx(5.0)
     assert planner_config.enable_gcs_optimization is False

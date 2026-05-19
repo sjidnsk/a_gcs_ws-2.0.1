@@ -161,6 +161,10 @@ def compute_flat_output_mapping(
     # 计算位置、速度、航向角、曲率、转向角、加速度
     position_list = []
     velocity_list = []
+    gear_list = []
+    signed_velocity_list = []
+    motion_heading_list = []
+    vehicle_heading_list = []
     heading_list = []
     curvature_list = []
     steering_angle_list = []
@@ -179,10 +183,17 @@ def compute_flat_output_mapping(
         # 计算速度
         velocity = FlatOutputMapper.compute_velocity(x_dot, y_dot)
         velocity_list.append(velocity)
+        gear = trajectory.get_gear(t) if hasattr(trajectory, "get_gear") else 1
+        gear_list.append(gear)
+        signed_velocity_list.append(gear * velocity)
 
         # 计算航向角
-        heading = FlatOutputMapper.compute_heading(x_dot, y_dot)
-        heading_list.append(heading)
+        motion_heading = FlatOutputMapper.compute_heading(x_dot, y_dot)
+        motion_heading_list.append(motion_heading)
+        vehicle_heading = motion_heading if gear >= 0 else motion_heading + np.pi
+        vehicle_heading = (vehicle_heading + np.pi) % (2 * np.pi) - np.pi
+        vehicle_heading_list.append(vehicle_heading)
+        heading_list.append(motion_heading)
 
         # 计算曲率
         curvature = FlatOutputMapper.compute_curvature(x_dot, y_dot, x_ddot, y_ddot)
@@ -199,6 +210,11 @@ def compute_flat_output_mapping(
     return {
         "position": np.hstack(position_list),  # (2, N)
         "velocity": np.array(velocity_list),
+        "speed": np.array(velocity_list),
+        "gear": np.array(gear_list, dtype=int),
+        "signed_velocity": np.array(signed_velocity_list),
+        "motion_heading": np.array(motion_heading_list),
+        "vehicle_heading": np.array(vehicle_heading_list),
         "heading": np.array(heading_list),
         "curvature": np.array(curvature_list),
         "steering_angle": np.array(steering_angle_list),

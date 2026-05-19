@@ -12,7 +12,7 @@ from typing import Optional, List
 from pydrake.geometry.optimization import HPolyhedron
 from pydrake.trajectories import BsplineTrajectory
 
-from .ackermann_bezier_gcs import AckermannBezierGCS
+from .ackermann_bezier_gcs import AckermannBezierGCS, GearLayeredAckermannBezierGCS
 from .ackermann_data_structures import (
     VehicleParams,
     EndpointState,
@@ -24,6 +24,7 @@ from .trajectory_evaluator import TrajectoryEvaluator
 from .curvature_statistics import CurvatureStatistics
 from .h_bar_prime_iteration import iterate_h_bar_prime, HBarPrimeIterationResult
 from .directional_curvature_parameters import DirectionalCurvatureParameterBuilder
+from .gear_annotations import annotate_reference_path, gear_at_s, gear_summary
 
 
 class AckermannGCSPlanner:
@@ -55,6 +56,114 @@ class AckermannGCSPlanner:
 
         # 初始化轨迹评估器
         self.evaluator = TrajectoryEvaluator(vehicle_params)
+
+    def _apply_fixed_reference_gear_costs(
+        self,
+        bezier_gcs: AckermannBezierGCS,
+        constraints: TrajectoryConstraints,
+        cost_weights: dict,
+        reference_path: Optional[List],
+        num_regions: int,
+    ) -> dict:
+        if reference_path is None:
+            return {
+                "fixed_reference_available": False,
+                "fixed_reference_reason": "reference_path_missing",
+            }
+
+        annotated = annotate_reference_path(
+            reference_path,
+            source=constraints.reference_gear_source,
+        )
+        reverse_weight = float(cost_weights.get("reverse", 0.0) or 0.0)
+        switch_weight = float(cost_weights.get("gear_switch", 0.0) or 0.0)
+        reverse_edges = 0
+        switch_edges = 0
+        constrained_edges = 0
+        total_s = float(annotated.cumulative_s[-1])
+
+        for edge in bezier_gcs.gcs.Edges():
+            u_name = edge.u().name()
+            v_name = edge.v().name()
+            if u_name == "source" or v_name == "target":
+                continue
+            region_idx = self._parse_region_index(u_name)
+            if region_idx is None or num_regions <= 0:
+                continue
+            start_s = total_s * region_idx / max(1, num_regions)
+            end_s = total_s * (region_idx + 1) / max(1, num_regions)
+            mid_s = 0.5 * (start_s + end_s)
+            gear = gear_at_s(annotated, mid_s)
+            bezier_gcs.setEdgeMetadata(edge, gear=gear, is_switch=False)
+            constrained_edges += 1
+            if gear == -1:
+                reverse_edges += 1
+                bezier_gcs.addConstantCostToEdge(edge, reverse_weight)
+            if gear_at_s(annotated, start_s) != gear_at_s(annotated, end_s):
+                switch_edges += 1
+                bezier_gcs.addConstantCostToEdge(edge, switch_weight)
+
+        summary = gear_summary(annotated.gears)
+        summary.update({
+            "fixed_reference_available": True,
+            "fixed_reference_edges": constrained_edges,
+            "fixed_reference_reverse_edges": reverse_edges,
+            "fixed_reference_switch_edges": switch_edges,
+        })
+        return summary
+
+    def _apply_reference_gear_bias(
+        self,
+        bezier_gcs: AckermannBezierGCS,
+        constraints: TrajectoryConstraints,
+        cost_weights: dict,
+        reference_path: Optional[List],
+        num_regions: int,
+    ) -> dict:
+        bias_weight = float(cost_weights.get("astar_gear_bias", 0.0) or 0.0)
+        if bias_weight <= 0 or reference_path is None:
+            return {"astar_gear_bias_edges": 0}
+
+        has_explicit_gears = all(
+            hasattr(point, "__len__") and len(point) >= 4
+            for point in reference_path
+        )
+        if not has_explicit_gears:
+            return {
+                "astar_gear_bias_edges": 0,
+                "astar_gear_bias_reason": "reference_gears_missing",
+            }
+
+        annotated = annotate_reference_path(
+            reference_path,
+            source=constraints.reference_gear_source,
+        )
+        total_s = float(annotated.cumulative_s[-1])
+        mismatch_edges = 0
+        for edge in bezier_gcs.gcs.Edges():
+            metadata = bezier_gcs.getEdgeMetadata(edge)
+            if metadata.get("is_switch", False):
+                continue
+            edge_gear = metadata.get("gear")
+            if edge_gear is None:
+                continue
+            region_idx = self._parse_region_index(edge.u().name())
+            if region_idx is None:
+                continue
+            start_s = total_s * region_idx / max(1, num_regions)
+            end_s = total_s * (region_idx + 1) / max(1, num_regions)
+            reference_gear = gear_at_s(annotated, 0.5 * (start_s + end_s))
+            if int(edge_gear) != int(reference_gear):
+                mismatch_edges += 1
+                bezier_gcs.addConstantCostToEdge(edge, bias_weight)
+        return {"astar_gear_bias_edges": mismatch_edges}
+
+    @staticmethod
+    def _parse_region_index(name: str) -> Optional[int]:
+        if not name or name[0] not in ("v", "f", "r"):
+            return None
+        suffix = name[1:]
+        return int(suffix) if suffix.isdigit() else None
 
     def plan_trajectory(
         self,
@@ -125,11 +234,44 @@ class AckermannGCSPlanner:
         if verbose:
             print("[Planner] Initializing AckermannBezierGCS...")
 
-        bezier_gcs = AckermannBezierGCS(
-            regions=workspace_regions,
-            vehicle_params=self.vehicle_params,
-            bezier_config=self.bezier_config,
-        )
+        if cost_weights is None:
+            cost_weights = {"time": 1.0, "path_length": 0.1, "energy": 0.01}
+
+        gear_diagnostics = {
+            "gear_strategy": constraints.gear_strategy,
+            "reference_gear_source": constraints.reference_gear_source,
+            "reverse_cost": float(cost_weights.get("reverse", 0.0)),
+            "gear_switch_cost": float(cost_weights.get("gear_switch", 0.0)),
+            "astar_gear_bias": float(cost_weights.get("astar_gear_bias", 0.0)),
+        }
+        fallback_reason = ""
+
+        if constraints.gear_strategy == "layered":
+            try:
+                bezier_gcs = GearLayeredAckermannBezierGCS(
+                    regions=workspace_regions,
+                    vehicle_params=self.vehicle_params,
+                    bezier_config=self.bezier_config,
+                    reverse_cost=cost_weights.get("reverse", 0.0),
+                    gear_switch_cost=cost_weights.get("gear_switch", 0.0),
+                )
+                gear_diagnostics.update(bezier_gcs.layered_edge_summary)
+            except Exception as exc:
+                if verbose:
+                    print(f"[Planner] Gear-layered GCS failed, falling back: {exc}")
+                bezier_gcs = AckermannBezierGCS(
+                    regions=workspace_regions,
+                    vehicle_params=self.vehicle_params,
+                    bezier_config=self.bezier_config,
+                )
+                fallback_reason = f"layered_build_failed: {exc}"
+                gear_diagnostics["fallback_reason"] = fallback_reason
+        else:
+            bezier_gcs = AckermannBezierGCS(
+                regions=workspace_regions,
+                vehicle_params=self.vehicle_params,
+                bezier_config=self.bezier_config,
+            )
 
         # 步骤3：添加起终点约束
         if verbose:
@@ -141,16 +283,41 @@ class AckermannGCSPlanner:
             target_position=target.position,
             target_heading=target.heading,
             source_velocity=(
-                source.velocity * np.array([np.cos(source.heading), np.sin(source.heading)])
+                (source.gear or 1)
+                * source.velocity
+                * np.array([np.cos(source.heading), np.sin(source.heading)])
                 if source.velocity is not None
                 else None
             ),
             target_velocity=(
-                target.velocity * np.array([np.cos(target.heading), np.sin(target.heading)])
+                (target.gear or 1)
+                * target.velocity
+                * np.array([np.cos(target.heading), np.sin(target.heading)])
                 if target.velocity is not None
                 else None
             ),
+            source_gear=source.gear,
+            target_gear=target.gear,
         )
+
+        if constraints.gear_strategy == "fixed_reference":
+            fixed_summary = self._apply_fixed_reference_gear_costs(
+                bezier_gcs,
+                constraints,
+                cost_weights,
+                reference_path,
+                len(workspace_regions),
+            )
+            gear_diagnostics.update(fixed_summary)
+        elif constraints.gear_strategy == "layered":
+            bias_summary = self._apply_reference_gear_bias(
+                bezier_gcs,
+                constraints,
+                cost_weights,
+                reference_path,
+                len(workspace_regions),
+            )
+            gear_diagnostics.update(bias_summary)
 
         # 步骤4：添加凸约束（速度）
         if verbose:
@@ -175,7 +342,6 @@ class AckermannGCSPlanner:
         # 步骤4.5：添加曲率硬约束
         h_bar_prime_iteration_result = None
         direction_cone_diagnostics = None
-        fallback_reason = ""
         active_curvature_constraint_mode = constraints.curvature_constraint_mode
 
         def _make_hard_fallback_constraints():
@@ -217,6 +383,7 @@ class AckermannGCSPlanner:
             )
             fallback_result.fallback_reason = reason
             fallback_result.direction_cone_diagnostics = direction_cone_diagnostics
+            fallback_result.gear_diagnostics = gear_diagnostics
             return fallback_result
 
         if constraints.curvature_constraint_mode == "direction_cone":
@@ -604,6 +771,7 @@ class AckermannGCSPlanner:
                 curvature_constraint_mode=active_curvature_constraint_mode,
                 direction_cone_diagnostics=direction_cone_diagnostics,
                 fallback_reason=fallback_reason,
+                gear_diagnostics=gear_diagnostics,
             )
 
         # 步骤7：评估轨迹
@@ -694,6 +862,14 @@ class AckermannGCSPlanner:
 
         convergence_reason = "converged" if converged else "max_iterations_reached"
 
+        if trajectory is not None:
+            gear_segments = getattr(trajectory, "gear_segments", [])
+            selected_gears = [segment.get("gear", 1) for segment in gear_segments]
+            gear_diagnostics.update(gear_summary(selected_gears or [1]))
+            gear_diagnostics["selected_switch_count"] = int(
+                sum(bool(segment.get("is_switch", False)) for segment in gear_segments)
+            )
+
         return PlanningResult(
             success=trajectory_report.is_feasible,
             trajectory=trajectory,
@@ -705,4 +881,5 @@ class AckermannGCSPlanner:
             curvature_constraint_mode=active_curvature_constraint_mode,
             direction_cone_diagnostics=direction_cone_diagnostics,
             fallback_reason=fallback_reason,
+            gear_diagnostics=gear_diagnostics,
         )

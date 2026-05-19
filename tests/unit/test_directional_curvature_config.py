@@ -71,3 +71,15 @@ def test_direction_cone_accepts_skip_risk_flags():
 def test_direction_cone_rejects_non_string_skip_risk_flags():
     with pytest.raises(ValueError, match="direction_cone_skip_risk_flags"):
         make_constraints(direction_cone_skip_risk_flags=("direction_mismatch", 1))
+
+
+def test_gear_strategy_configuration_is_validated():
+    constraints = make_constraints(gear_strategy="layered")
+
+    assert constraints.gear_strategy == "layered"
+
+    with pytest.raises(ValueError, match="gear_strategy"):
+        make_constraints(gear_strategy="banana")
+
+    with pytest.raises(ValueError, match="reference_gear_source"):
+        make_constraints(reference_gear_source="banana")

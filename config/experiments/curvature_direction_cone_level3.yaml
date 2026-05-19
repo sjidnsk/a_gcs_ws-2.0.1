@@ -1,0 +1,14 @@
+extends:
+  - curvature_direction_cone.yaml
+
+ackermann:
+  constraints:
+    gear_strategy: fixed_reference
+    reference_gear_source: infer
+    gear_switch_requires_stationary: true
+
+gcs:
+  cost_weights:
+    reverse: 0.5
+    gear_switch: 2.0
+    astar_gear_bias: 0.0

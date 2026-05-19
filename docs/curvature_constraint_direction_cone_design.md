@@ -963,6 +963,14 @@ GCS 选择换挡点
 
 用途：完整倒车/换挡规划。该级别改动大，不建议作为第一阶段。
 
+实现约定：
+
+- A* gear 不作为 GCS 硬约束。A* gear 只能在显式配置时作为弱成本 bias，用于 tie-break，不得限制 GCS 自主选择 forward/reverse。
+- `fixed_reference` 是 Level 3 基线模式；gear 可来自 A*、用户提供路径或几何推断，但仍只约束该模式。
+- `layered` 是 Level 4 主模式；每个物理区域复制为 forward/reverse 两层，GCS 在图上自行选择 gear 和换挡边。
+- Level 4 的换挡边应是 stationary switch segment：该边所有空间控制点相等，时间控制点仍单调推进；配合 C1 连续性，使换挡点速度为 0。
+- direction-cone 曲率约束只加在移动边上，switch edge 跳过并在 diagnostics 中记录。
+
 ### 19.10 推荐结论
 
 在不大幅降低系统运行效率的前提下，最佳方案是 **Level 2：鲁棒前进-only 方案**：

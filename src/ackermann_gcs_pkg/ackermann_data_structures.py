@@ -19,6 +19,7 @@ import numpy as np
 
 # 导入数值安全工具
 from .numerical_safety_utils import check_tan_safety, NumericalSafetyError
+from .gear_annotations import normalize_gear
 
 
 # === 时间缩放导数下界常量 ===
@@ -93,6 +94,7 @@ class EndpointState:
     position: np.ndarray
     heading: float
     velocity: Optional[float] = None
+    gear: Optional[int] = None
 
     def __post_init__(self):
         """参数验证"""
@@ -102,6 +104,8 @@ class EndpointState:
             raise ValueError(f"heading must be in [-π, π], got {self.heading}")
         if self.velocity is not None and self.velocity < 0:
             raise ValueError(f"velocity must be non-negative, got {self.velocity}")
+        if self.gear is not None:
+            self.gear = normalize_gear(self.gear)
 
     @classmethod
     def fromdict(cls, data: Dict) -> 'EndpointState':
@@ -180,6 +184,9 @@ class TrajectoryConstraints:
     direction_cone_use_vertex_width_when_available: bool = True
     direction_cone_rho_warning_ratio: float = 0.2
     direction_cone_skip_risk_flags: Tuple[str, ...] = ()
+    gear_strategy: str = "none"
+    reference_gear_source: str = "infer"
+    gear_switch_requires_stationary: bool = True
 
     def __post_init__(self):
         """参数验证"""
@@ -263,6 +270,18 @@ class TrajectoryConstraints:
             isinstance(flag, str) for flag in self.direction_cone_skip_risk_flags
         ):
             raise ValueError("direction_cone_skip_risk_flags must contain strings")
+        if self.gear_strategy not in ("none", "fixed_reference", "layered"):
+            raise ValueError(
+                "gear_strategy must be one of "
+                "'none', 'fixed_reference', 'layered', "
+                f"got {self.gear_strategy}"
+            )
+        if self.reference_gear_source not in ("infer", "astar", "provided"):
+            raise ValueError(
+                "reference_gear_source must be one of "
+                "'infer', 'astar', 'provided', "
+                f"got {self.reference_gear_source}"
+            )
 
     @classmethod
     def fromdict(cls, data: Dict) -> 'TrajectoryConstraints':
@@ -584,6 +603,7 @@ class PlanningResult:
     curvature_constraint_mode: str = ""
     direction_cone_diagnostics: Optional[Dict] = None
     fallback_reason: str = ""
+    gear_diagnostics: Optional[Dict] = None
 
     def todict(self) -> Dict:
         """转换为字典"""

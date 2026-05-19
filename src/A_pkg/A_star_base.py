@@ -93,6 +93,7 @@ class SearchNode:
     h_cost: float = field(compare=False)
     parent: Optional['SearchNode'] = field(compare=False, default=None)
     direction: Optional[Tuple[float, float, float]] = field(compare=False, default=None)
+    motion_gear: int = field(compare=False, default=1)
 
 
 # ============== 工具函数 ==============

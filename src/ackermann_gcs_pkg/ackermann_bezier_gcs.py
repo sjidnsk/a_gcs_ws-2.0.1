@@ -29,6 +29,7 @@ from .rotation_matrix_heading_constraint import (
     LinearizedHeadingConstraint,
     DirectionConstraint,
 )
+from .gear_annotations import normalize_gear
 
 
 @dataclass
@@ -40,6 +41,7 @@ class TypedConstraint:
     """
     constraint: Constraint  # Drake约束对象
     constraint_type: str    # 'source' 或 'target'
+    gear: Optional[int] = None
 
 
 class AckermannBezierGCS(BezierGCS):
@@ -54,6 +56,7 @@ class AckermannBezierGCS(BezierGCS):
         regions: List[HPolyhedron],
         vehicle_params: VehicleParams,
         bezier_config: Optional[BezierConfig] = None,
+        edges: Optional[List[tuple]] = None,
     ):
         """
         初始化阿克曼贝塞尔GCS
@@ -72,6 +75,7 @@ class AckermannBezierGCS(BezierGCS):
             regions=regions,
             order=bezier_config.order,
             continuity=bezier_config.continuity,
+            edges=edges,
             hdot_min=bezier_config.hdot_min,
             full_dim_overlap=bezier_config.full_dim_overlap,
             hyperellipsoid_num_samples_per_dim_factor=bezier_config.hyperellipsoid_num_samples_per_dim_factor,
@@ -99,6 +103,8 @@ class AckermannBezierGCS(BezierGCS):
         verbose: bool = True,
         source_is_v0: bool = False,
         target_is_v0: bool = False,
+        source_gear: Optional[int] = None,
+        target_gear: Optional[int] = None,
     ) -> None:
         """
         添加航向角约束
@@ -124,6 +130,8 @@ class AckermannBezierGCS(BezierGCS):
         # 使用传入配置或默认配置
         if config is None:
             config = self.heading_constraint_config
+        source_gear = normalize_gear(source_gear if source_gear is not None else 1)
+        target_gear = normalize_gear(target_gear if target_gear is not None else 1)
         
         # 调试输出：约束配置信息
         if verbose:
@@ -139,6 +147,8 @@ class AckermannBezierGCS(BezierGCS):
                 print(f"  起点v=0: 逐对禁用第一对点积约束")
             if target_is_v0:
                 print(f"  终点v=0: 逐对禁用第一对点积约束")
+            print(f"起点gear: {source_gear:+d}")
+            print(f"终点gear: {target_gear:+d}")
         
         # 获取边上的变量
         u_control = self.u_r_trajectory.control_points()
@@ -264,7 +274,8 @@ class AckermannBezierGCS(BezierGCS):
                 self.u_vars,
                 config,
                 constraint_type='source',
-                is_first_pair_degenerate=source_is_v0
+                is_first_pair_degenerate=source_is_v0,
+                direction_gear=source_gear,
             )
             target_constraints = HeadingConstraintFactory.create_heading_constraints_per_pair(
                 target_heading,
@@ -272,7 +283,8 @@ class AckermannBezierGCS(BezierGCS):
                 self.u_vars,
                 config,
                 constraint_type='target',
-                is_first_pair_degenerate=target_is_v0
+                is_first_pair_degenerate=target_is_v0,
+                direction_gear=target_gear,
             )
         else:
             # 标准路径：使用原有工厂方法
@@ -281,22 +293,24 @@ class AckermannBezierGCS(BezierGCS):
                 source_control_points,
                 self.u_vars,
                 config,
-                constraint_type='source'
+                constraint_type='source',
+                direction_gear=source_gear,
             )
             target_constraints = HeadingConstraintFactory.create_heading_constraints(
                 target_heading,
                 target_control_points,
                 self.u_vars,
                 config,
-                constraint_type='target'
+                constraint_type='target',
+                direction_gear=target_gear,
             )
 
         # 包装约束为TypedConstraint
         typed_constraints = []
         for constraint in source_constraints:
-            typed_constraints.append(TypedConstraint(constraint, 'source'))
+            typed_constraints.append(TypedConstraint(constraint, 'source', source_gear))
         for constraint in target_constraints:
-            typed_constraints.append(TypedConstraint(constraint, 'target'))
+            typed_constraints.append(TypedConstraint(constraint, 'target', target_gear))
 
         # 调试输出：约束创建结果
         if verbose:
@@ -338,6 +352,8 @@ class AckermannBezierGCS(BezierGCS):
         target_heading: float,
         source_velocity: Optional[np.ndarray] = None,
         target_velocity: Optional[np.ndarray] = None,
+        source_gear: Optional[int] = None,
+        target_gear: Optional[int] = None,
         heading_config: Optional[HeadingConstraintConfig] = None,
         verbose: bool = True,
     ) -> None:
@@ -359,6 +375,10 @@ class AckermannBezierGCS(BezierGCS):
         """
         # v=0退化判断阈值
         v_threshold = 1e-6
+        source_gear_filter = source_gear
+        target_gear_filter = target_gear
+        source_gear = normalize_gear(source_gear if source_gear is not None else 1)
+        target_gear = normalize_gear(target_gear if target_gear is not None else 1)
 
         # 判断起终点速度是否为0
         source_is_v0 = (source_velocity is not None and
@@ -374,6 +394,8 @@ class AckermannBezierGCS(BezierGCS):
             print(f"起点航向角: {np.degrees(source_heading):.2f}°")
             print(f"终点位置: ({target_position[0]:.2f}, {target_position[1]:.2f})")
             print(f"终点航向角: {np.degrees(target_heading):.2f}°")
+            print(f"起点gear: {source_gear:+d}")
+            print(f"终点gear: {target_gear:+d}")
             if source_velocity is not None:
                 print(f"起点速度: ({source_velocity[0]:.2f}, {source_velocity[1]:.2f})")
                 if source_is_v0:
@@ -392,10 +414,20 @@ class AckermannBezierGCS(BezierGCS):
         if verbose:
             print("\n添加位置约束...")
         
+        source_target_edges = None
+        if hasattr(self, "source_target_edges_for_gears"):
+            source_target_edges = self.source_target_edges_for_gears(
+                source_position,
+                target_position,
+                source_gear_filter,
+                target_gear_filter,
+            )
+
         self.addSourceTarget(
             source=source_position,
             target=target_position,
             velocity=velocity,
+            edges=source_target_edges,
         )
         
         if verbose:
@@ -403,12 +435,30 @@ class AckermannBezierGCS(BezierGCS):
             print("\n添加航向角约束...")
         
         # 添加航向角约束（传递v=0退化信息）
-        self._add_heading_constraint(
-            source_heading, target_heading, heading_config,
-            verbose=verbose,
-            source_is_v0=source_is_v0,
-            target_is_v0=target_is_v0,
-        )
+        if getattr(self, "is_gear_layered", False):
+            source_gears = (-1, 1) if source_gear_filter is None else (source_gear,)
+            target_gears = (-1, 1) if target_gear_filter is None else (target_gear,)
+            first_verbose = verbose
+            for sg in source_gears:
+                for tg in target_gears:
+                    self._add_heading_constraint(
+                        source_heading, target_heading, heading_config,
+                        verbose=first_verbose,
+                        source_is_v0=source_is_v0,
+                        target_is_v0=target_is_v0,
+                        source_gear=sg,
+                        target_gear=tg,
+                    )
+                    first_verbose = False
+        else:
+            self._add_heading_constraint(
+                source_heading, target_heading, heading_config,
+                verbose=verbose,
+                source_is_v0=source_is_v0,
+                target_is_v0=target_is_v0,
+                source_gear=source_gear,
+                target_gear=target_gear,
+            )
         
         if verbose:
             print("✓ 航向角约束添加完成")
@@ -519,9 +569,9 @@ class AckermannBezierGCS(BezierGCS):
             # 检查是否为TypedConstraint
             if isinstance(item, TypedConstraint):
                 if item.constraint_type == 'source':
-                    source_heading_constraints.append(item.constraint)
+                    source_heading_constraints.append(item)
                 elif item.constraint_type == 'target':
-                    target_heading_constraints.append(item.constraint)
+                    target_heading_constraints.append(item)
                 else:
                     other_constraints.append(item.constraint)
             elif hasattr(item, 'constraint_type'):
@@ -553,8 +603,12 @@ class AckermannBezierGCS(BezierGCS):
         # 应用起点航向角约束到第一条真实边
         if source_heading_constraints:
             for edge in classified_edges['first_real_edges']:
-                for constraint in source_heading_constraints:
-                    edge.AddConstraint(Binding[Constraint](constraint, edge.xu()))
+                if self.getEdgeMetadata(edge).get("is_switch", False):
+                    continue
+                for item in source_heading_constraints:
+                    if not self._typed_constraint_applies_to_edge(item, edge):
+                        continue
+                    edge.AddConstraint(Binding[Constraint](item.constraint, edge.xu()))
                     total_applied_constraints += 1
             if verbose:
                 print(f"\n✓ 起点航向角约束已应用到 {len(classified_edges['first_real_edges'])} 条第一条真实边")
@@ -562,8 +616,10 @@ class AckermannBezierGCS(BezierGCS):
         # 应用终点航向角约束到target边
         if target_heading_constraints:
             for edge in classified_edges['target_edges']:
-                for constraint in target_heading_constraints:
-                    edge.AddConstraint(Binding[Constraint](constraint, edge.xu()))
+                for item in target_heading_constraints:
+                    if not self._typed_constraint_applies_to_edge(item, edge):
+                        continue
+                    edge.AddConstraint(Binding[Constraint](item.constraint, edge.xu()))
                     total_applied_constraints += 1
             if verbose:
                 print(f"✓ 终点航向角约束已应用到 {len(classified_edges['target_edges'])} 条target边")
@@ -600,3 +656,127 @@ class AckermannBezierGCS(BezierGCS):
             print("=" * 60)
 
         return result
+
+    def _typed_constraint_applies_to_edge(self, item: TypedConstraint, edge) -> bool:
+        metadata = self.getEdgeMetadata(edge)
+        edge_gear = metadata.get("gear")
+        if edge_gear is None or item.gear is None:
+            return True
+        return int(edge_gear) == int(item.gear)
+
+
+class GearLayeredAckermannBezierGCS(AckermannBezierGCS):
+    """Ackermann GCS graph with forward/reverse region layers."""
+
+    is_gear_layered = True
+
+    def __init__(
+        self,
+        regions: List[HPolyhedron],
+        vehicle_params: VehicleParams,
+        bezier_config: Optional[BezierConfig] = None,
+        reverse_cost: float = 0.0,
+        gear_switch_cost: float = 0.0,
+    ):
+        self.original_regions = list(regions)
+        self.reverse_cost = float(reverse_cost or 0.0)
+        self.gear_switch_cost = float(gear_switch_cost or 0.0)
+        self.layered_edge_summary = {
+            "moving_edges": 0,
+            "switch_edges": 0,
+            "stationary_constraints": 0,
+        }
+
+        layered_regions = {}
+        for idx, region in enumerate(regions):
+            layered_regions[f"f{idx}"] = region
+            layered_regions[f"r{idx}"] = region
+
+        edges = self._build_layered_edges(regions)
+        super().__init__(
+            regions=layered_regions,
+            vehicle_params=vehicle_params,
+            bezier_config=bezier_config,
+            edges=edges,
+        )
+        self._annotate_layered_edges()
+
+    @staticmethod
+    def _layer_index(region_idx: int, gear: int) -> int:
+        return 2 * region_idx + (0 if gear == 1 else 1)
+
+    @classmethod
+    def _build_layered_edges(cls, regions: List[HPolyhedron]) -> List[tuple]:
+        edges: List[tuple] = []
+        for ii in range(len(regions)):
+            for jj in range(ii + 1, len(regions)):
+                if regions[ii].IntersectsWith(regions[jj]):
+                    for gear in (1, -1):
+                        a = cls._layer_index(ii, gear)
+                        b = cls._layer_index(jj, gear)
+                        edges.append((a, b))
+                        edges.append((b, a))
+        for idx in range(len(regions)):
+            f_idx = cls._layer_index(idx, 1)
+            r_idx = cls._layer_index(idx, -1)
+            edges.append((f_idx, r_idx))
+            edges.append((r_idx, f_idx))
+        return edges
+
+    @staticmethod
+    def _parse_layered_name(name: str):
+        if not name or name[0] not in ("f", "r"):
+            return None, None
+        suffix = name[1:]
+        if not suffix.isdigit():
+            return None, None
+        return (1 if name[0] == "f" else -1), int(suffix)
+
+    def _annotate_layered_edges(self) -> None:
+        for edge in self.gcs.Edges():
+            u_name = edge.u().name()
+            v_name = edge.v().name()
+            u_gear, u_idx = self._parse_layered_name(u_name)
+            v_gear, v_idx = self._parse_layered_name(v_name)
+            if u_gear is None or v_gear is None:
+                continue
+            is_switch = u_idx == v_idx and u_gear != v_gear
+            edge_gear = v_gear if is_switch else u_gear
+            self.setEdgeMetadata(
+                edge,
+                u_name=u_name,
+                v_name=v_name,
+                gear=edge_gear,
+                is_switch=is_switch,
+                physical_region=u_idx if u_idx == v_idx else None,
+            )
+            if is_switch:
+                self.layered_edge_summary["switch_edges"] += 1
+                self.layered_edge_summary["stationary_constraints"] += (
+                    self.addStationarySwitchConstraintToEdge(edge)
+                )
+                self.addConstantCostToEdge(edge, self.gear_switch_cost)
+            else:
+                self.layered_edge_summary["moving_edges"] += 1
+                if edge_gear == -1:
+                    self.addConstantCostToEdge(edge, self.reverse_cost)
+
+    def source_target_edges_for_gears(
+        self,
+        source_position: np.ndarray,
+        target_position: np.ndarray,
+        source_gear: Optional[int],
+        target_gear: Optional[int],
+    ):
+        edges = self.findStartGoalEdges(source_position, target_position)
+        return [
+            self._filter_layer_indices(edges[0], source_gear),
+            self._filter_layer_indices(edges[1], target_gear),
+        ]
+
+    def _filter_layer_indices(self, indices, gear: Optional[int]):
+        if gear is None:
+            return list(indices)
+        gear = normalize_gear(gear)
+        prefix = "f" if gear == 1 else "r"
+        return [idx for idx in indices if self.names[idx].startswith(prefix)]

@@ -23,6 +23,7 @@ def create_endpoint_state(
     position: Tuple[float, float],
     heading: float,
     velocity: Optional[float] = None,
+    gear: Optional[int] = None,
 ):
     """Create an Ackermann endpoint state."""
     from ackermann_gcs_pkg.ackermann_data_structures import EndpointState
@@ -31,6 +32,7 @@ def create_endpoint_state(
         position=np.array(position),
         heading=heading,
         velocity=velocity,
+        gear=gear,
     )
 
 
@@ -238,6 +240,7 @@ def plan_path(
     start: Tuple[float, float, float],
     goal: Tuple[float, float, float],
     project_config: Optional[ProjectConfig] = None,
+    include_gear: bool = False,
 ) -> Optional[List[Any]]:
     """Run the SE(2) A* planner for a scenario."""
     from A_pkg.A_star_fast_optimized import FastSE2AStarPlanner
@@ -253,5 +256,11 @@ def plan_path(
         theta_resolution=project_config.astar.theta_resolution,
         config=project_config.astar_planner_config(),
     )
-    return planner.plan(start, goal)
+    path = planner.plan(start, goal)
+    if not include_gear:
+        return path
+    return {
+        "path": path,
+        "gear_path": getattr(planner, "last_path_with_gears", None),
+    }
 

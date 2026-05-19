@@ -47,6 +47,10 @@ def run_single_test(run_id: int, scenario: str, project_config: ProjectConfig):
         'velocity_violation': 0.0,
         'acceleration_violation': 0.0,
         'workspace_violation': 0.0,
+        'reverse_ratio': 0.0,
+        'switch_count': 0,
+        'fallback': False,
+        'fallback_reason': '',
         'error': None,
     }
 
@@ -61,7 +65,18 @@ def run_single_test(run_id: int, scenario: str, project_config: ProjectConfig):
         )
 
         # 2. A*路径规划
-        astar_path = plan_path(c_space, start, goal, project_config)
+        include_astar_gear = (
+            project_config.ackermann.constraints.reference_gear_source == "astar"
+        )
+        astar_result = plan_path(
+            c_space, start, goal, project_config, include_gear=include_astar_gear
+        )
+        if isinstance(astar_result, dict):
+            astar_path = astar_result["path"]
+            reference_path = astar_result.get("gear_path") or astar_path
+        else:
+            astar_path = astar_result
+            reference_path = astar_path
         if not astar_path:
             result['error'] = 'A* path planning failed'
             return result
@@ -106,7 +121,7 @@ def run_single_test(run_id: int, scenario: str, project_config: ProjectConfig):
             workspace_regions=workspace_regions,
             constraints=constraints,
             cost_weights=project_config.cost_weights(),
-            reference_path=astar_path,
+            reference_path=reference_path,
             verbose=False
         )
         result['solve_time'] = time.time() - t_start
@@ -133,6 +148,17 @@ def run_single_test(run_id: int, scenario: str, project_config: ProjectConfig):
                 result['workspace_violation'] = report.workspace_violation.max_violation
             if report.curvature_stats:
                 result['max_curvature'] = report.curvature_stats.max_curvature
+        if planning_result.gear_diagnostics:
+            result['gear_strategy'] = planning_result.gear_diagnostics.get('gear_strategy')
+            result['reverse_count'] = planning_result.gear_diagnostics.get('reverse_count', 0)
+            result['switch_count'] = planning_result.gear_diagnostics.get('selected_switch_count', 0)
+            gear_sequence = planning_result.gear_diagnostics.get('gear_sequence') or []
+            if gear_sequence:
+                result['reverse_ratio'] = (
+                    sum(1 for gear in gear_sequence if gear == -1) / len(gear_sequence)
+                )
+        result['fallback_reason'] = planning_result.fallback_reason or ''
+        result['fallback'] = bool(result['fallback_reason'])
 
     except Exception as e:
         result['error'] = str(e)
@@ -225,6 +251,10 @@ def main():
         vel_violations = [r['velocity_violation'] for r in successes]
         acc_violations = [r['acceleration_violation'] for r in successes]
         workspace_violations = [r['workspace_violation'] for r in successes]
+        reverse_counts = [r.get('reverse_count', 0) for r in successes]
+        reverse_ratios = [r.get('reverse_ratio', 0.0) for r in successes]
+        switch_counts = [r.get('switch_count', 0) for r in successes]
+        fallback_count = sum(1 for r in successes if r.get('fallback'))
 
         print(f"\n--- 求解时间 (s) ---")
         print(f"  均值: {np.mean(solve_times):.3f}")
@@ -259,6 +289,13 @@ def main():
         print(f"  最大: {np.max(workspace_violations):.6f}")
         print(f"  零违反次数: {sum(1 for v in workspace_violations if v < 1e-4)}/{len(successes)}")
 
+        print(f"\n--- Gear统计 ---")
+        print(f"  reverse段均值: {np.mean(reverse_counts):.2f}")
+        print(f"  reverse比例均值: {np.mean(reverse_ratios):.2%}")
+        print(f"  switch次数均值: {np.mean(switch_counts):.2f}")
+        print(f"  switch次数最大: {np.max(switch_counts)}")
+        print(f"  fallback次数: {fallback_count}/{len(successes)}")
+
         # 逐次详细结果
         print(f"\n--- 逐次详细结果 ---")
         for r in successes:
@@ -268,7 +305,11 @@ def main():
                   f"κ_viol={r['curvature_violation']:.4f} | "
                   f"v_viol={r['velocity_violation']:.4f} | "
                   f"a_viol={r['acceleration_violation']:.4f} | "
-                  f"ws_viol={r['workspace_violation']:.4f}")
+                  f"ws_viol={r['workspace_violation']:.4f} | "
+                  f"rev={r.get('reverse_count', 0)} | "
+                  f"rev_ratio={r.get('reverse_ratio', 0.0):.2%} | "
+                  f"sw={r.get('switch_count', 0)} | "
+                  f"fallback={r.get('fallback', False)}")
 
     errors = [r for r in results if r['error']]
     if errors:

@@ -105,7 +105,18 @@ def visualize_3d_trajectory_interactive(
     print("步骤2: A*路径规划...")
     start = config['start']
     goal = config['goal']
-    path = plan_path(c_space, start, goal, project_config)
+    include_astar_gear = (
+        project_config.ackermann.constraints.reference_gear_source == "astar"
+    )
+    path_result = plan_path(
+        c_space, start, goal, project_config, include_gear=include_astar_gear
+    )
+    if isinstance(path_result, dict):
+        path = path_result["path"]
+        reference_path = path_result.get("gear_path") or path
+    else:
+        path = path_result
+        reference_path = path
     
     if not path:
         print("✗ A*路径规划失败")
@@ -167,7 +178,7 @@ def visualize_3d_trajectory_interactive(
         workspace_regions=workspace_regions,
         constraints=constraints,
         cost_weights=project_config.cost_weights(),
-        reference_path=path,
+        reference_path=reference_path,
         verbose=project_config.ackermann.verbose
     )
     
@@ -176,6 +187,19 @@ def visualize_3d_trajectory_interactive(
         return
     
     print(f"✓ 轨迹规划成功，求解时间: {planning_result.solve_time:.2f}s")
+    if planning_result.gear_diagnostics:
+        print(f"Gear diagnostics: {planning_result.gear_diagnostics}")
+    gear_segments = getattr(planning_result.trajectory, "gear_segments", [])
+    if gear_segments:
+        print("Gear segments:")
+        for segment in gear_segments:
+            print(
+                "  "
+                f"s=[{segment.get('start_s', 0.0):.2f}, "
+                f"{segment.get('end_s', 0.0):.2f}], "
+                f"gear={segment.get('gear', 1)}, "
+                f"switch={segment.get('is_switch', False)}"
+            )
     actual_curvature_mode = planning_result.curvature_constraint_mode or curvature_mode
     curvature_label = curvature_mode
     if actual_curvature_mode != curvature_mode:

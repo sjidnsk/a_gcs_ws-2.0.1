@@ -360,6 +360,8 @@ class DirectionalCurvatureParameterBuilder:
                     continue
                 if _edge_matches_any(edge, boundary_edge_ids):
                     continue
+                if _edge_is_switch(edge):
+                    continue
                 region_idx = _edge_u_region_index(edge)
                 if region_idx is None or not (0 <= region_idx < len(regions)):
                     continue
@@ -745,7 +747,7 @@ def _edge_vertex_name(vertex: Any) -> str:
 
 
 def _parse_region_index(name: str) -> Optional[int]:
-    if name.startswith("v"):
+    if name.startswith(("v", "f", "r")):
         suffix = name[1:]
         if suffix.isdigit():
             return int(suffix)
@@ -762,6 +764,16 @@ def _edge_v_region_index(edge: Any) -> Optional[int]:
 
 def _edge_touches_source(edge: Any) -> bool:
     return _edge_vertex_name(edge.u()) == "source"
+
+
+def _edge_is_switch(edge: Any) -> bool:
+    u_name = _edge_vertex_name(edge.u())
+    v_name = _edge_vertex_name(edge.v())
+    if not u_name or not v_name:
+        return False
+    if u_name[0:1] not in ("f", "r") or v_name[0:1] not in ("f", "r"):
+        return False
+    return u_name[0] != v_name[0] and _parse_region_index(u_name) == _parse_region_index(v_name)
 
 
 def _edge_keys(edge: Any) -> set[Any]:

@@ -227,6 +227,7 @@ class BezierGCS(BaseGCS):
         self.curvature_constraints = []       # 仅曲率约束
         self._curvature_constraint_bindings = []  # (edge, binding) 对
         self.edge_costs = []
+        self.edge_metadata = {}
 
         # 添加边到图中并应用约束
         if edges is None:
@@ -240,11 +241,71 @@ class BezierGCS(BaseGCS):
             u = vertices[ii]
             v = vertices[jj]
             edge = self.gcs.AddEdge(u, v, f"({u.name()}, {v.name()})")
+            self.edge_metadata[self._edge_metadata_key(edge)] = {
+                "u_name": u.name(),
+                "v_name": v.name(),
+                "gear": None,
+                "is_switch": False,
+                "physical_region": None,
+            }
 
             # 为边添加连续性约束
             for c_con in self.contin_constraints:
                 edge.AddConstraint(Binding[Constraint](
                         c_con, np.append(u.x(), v.x())))
+
+    @staticmethod
+    def _edge_metadata_key(edge):
+        name_attr = getattr(edge, "name", None)
+        if callable(name_attr):
+            try:
+                return name_attr()
+            except Exception:
+                pass
+        return id(edge)
+
+    @staticmethod
+    def _gear_from_vertex_name(name):
+        if isinstance(name, str) and name.startswith("f"):
+            return 1
+        if isinstance(name, str) and name.startswith("r"):
+            return -1
+        return None
+
+    def setEdgeMetadata(self, edge, **metadata):
+        key = self._edge_metadata_key(edge)
+        current = self.edge_metadata.setdefault(key, {})
+        current.update(metadata)
+
+    def getEdgeMetadata(self, edge):
+        return self.edge_metadata.get(self._edge_metadata_key(edge), {})
+
+    def addConstantCostToEdge(self, edge, weight):
+        """Add a non-negative constant cost to a single GCS edge."""
+        if weight is None or weight <= 0:
+            return None
+        constant_cost = LinearCost(
+            np.zeros(len(edge.xu()), dtype=float),
+            float(weight),
+        )
+        edge.AddCost(Binding[Cost](constant_cost, edge.xu()))
+        return constant_cost
+
+    def addStationarySwitchConstraintToEdge(self, edge):
+        """Force all destination spatial control points on an edge to coincide."""
+        constraints_added = 0
+        vars_xv = edge.xv()
+        spatial_vars = vars_xv[: self.dimension * (self.order + 1)]
+        control = np.reshape(spatial_vars, (self.dimension, self.order + 1), "F")
+        for idx in range(1, self.order + 1):
+            equality = control[:, idx] - control[:, 0]
+            con = LinearEqualityConstraint(
+                DecomposeLinearExpressions(equality, vars_xv),
+                np.zeros(self.dimension),
+            )
+            edge.AddConstraint(Binding[Constraint](con, vars_xv))
+            constraints_added += self.dimension
+        return constraints_added
 
     def addTimeCost(self, weight):
         """
@@ -1347,6 +1408,14 @@ class BezierGCS(BaseGCS):
 
         # 为源点边添加约束
         for edge in source_edges:
+            self.setEdgeMetadata(
+                edge,
+                u_name="source",
+                v_name=edge.v().name(),
+                gear=self._gear_from_vertex_name(edge.v().name()),
+                is_switch=False,
+                physical_region=None,
+            )
             # 源点边：源点和第一个顶点在空间上重合
             for jj in range(self.dimension):
                 edge.AddConstraint(edge.xu()[jj] == edge.xv()[jj])
@@ -1374,6 +1443,14 @@ class BezierGCS(BaseGCS):
 
         # 为目标点边添加约束
         for edge in target_edges:    
+            self.setEdgeMetadata(
+                edge,
+                u_name=edge.u().name(),
+                v_name="target",
+                gear=self._gear_from_vertex_name(edge.u().name()),
+                is_switch=False,
+                physical_region=None,
+            )
             # 目标点边：最后一个顶点和目标点在空间上重合
             for jj in range(self.dimension):
                 edge.AddConstraint(
@@ -1428,6 +1505,7 @@ class BezierGCS(BaseGCS):
             knots = np.zeros(self.order + 1)
             path_control_points = []
             time_control_points = []
+            gear_segments = []
 
             for edge in path_edges:
                 if edge.v() == self.target:
@@ -1438,6 +1516,14 @@ class BezierGCS(BaseGCS):
                     break
 
                 edge_time = knots[-1] + 1.
+                metadata = self.getEdgeMetadata(edge)
+                gear_segments.append({
+                    "start_s": float(knots[-1]),
+                    "end_s": float(edge_time),
+                    "gear": metadata.get("gear", 1) or 1,
+                    "is_switch": bool(metadata.get("is_switch", False)),
+                    "edge_name": self._edge_metadata_key(edge),
+                })
                 knots = np.concatenate(
                     (knots, np.full(self.order, edge_time)))
 
@@ -1464,7 +1550,7 @@ class BezierGCS(BaseGCS):
             time_traj = BsplineTrajectory(
                 BsplineBasis(self.order + 1, knots), time_control_points)
 
-            return BezierTrajectory(path, time_traj)
+            return BezierTrajectory(path, time_traj, gear_segments=gear_segments)
         except Exception:
             return None
 
@@ -1521,7 +1607,7 @@ class BezierTrajectory:
     该类将空间轨迹和时间轨迹组合，使得可以通过实际时间t查询对应的空间位置。
     """
     
-    def __init__(self, path_traj, time_traj):
+    def __init__(self, path_traj, time_traj, gear_segments=None):
         """
         初始化贝塞尔轨迹
         
@@ -1535,6 +1621,7 @@ class BezierTrajectory:
         self.time_traj = time_traj
         self.start_s = path_traj.start_time()  # 参数s的起始值
         self.end_s = path_traj.end_time()      # 参数s的结束值
+        self.gear_segments = list(gear_segments or [])
 
     def invert_time_traj(self, t):
         """
@@ -1567,6 +1654,16 @@ class BezierTrajectory:
             array: t时刻的空间位置
         """
         return self.path_traj.value(self.invert_time_traj(np.squeeze(t)))
+
+    def get_gear(self, t):
+        """Return the selected gear at actual time t."""
+        if not self.gear_segments:
+            return 1
+        s = self.invert_time_traj(np.squeeze(t))
+        for segment in self.gear_segments:
+            if segment["start_s"] <= s <= segment["end_s"]:
+                return int(segment.get("gear", 1) or 1)
+        return int(self.gear_segments[-1].get("gear", 1) or 1)
 
     def vector_values(self, times):
         """

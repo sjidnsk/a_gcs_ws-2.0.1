@@ -19,7 +19,7 @@ if TYPE_CHECKING:
         PlanningResult,
         CurvatureDerivatives,
     )
-    from .ackermann_bezier_gcs import AckermannBezierGCS
+    from .ackermann_bezier_gcs import AckermannBezierGCS, GearLayeredAckermannBezierGCS
     from .ackermann_gcs_planner import AckermannGCSPlanner
     from .trajectory_evaluator import TrajectoryEvaluator
     from .directional_curvature_parameters import (
@@ -30,6 +30,16 @@ if TYPE_CHECKING:
         compute_support_width,
         directional_curvature_linear_constraints,
         preprocess_reference_path,
+    )
+    from .gear_annotations import (
+        GearAnnotatedPath,
+        GearSegment,
+        annotate_reference_path,
+        gear_at_s,
+        gear_summary,
+        infer_gears_from_path,
+        normalize_gear,
+        strip_gears,
     )
     from .h_bar_prime_iteration import (
         HBarPrimeIterationResult,
@@ -66,10 +76,11 @@ def __getattr__(name: str):
         return obj
     
     # 核心类
-    if name == "AckermannBezierGCS":
-        from .ackermann_bezier_gcs import AckermannBezierGCS
-        _import_cache[name] = AckermannBezierGCS
-        return AckermannBezierGCS
+    if name in ("AckermannBezierGCS", "GearLayeredAckermannBezierGCS"):
+        from . import ackermann_bezier_gcs
+        obj = getattr(ackermann_bezier_gcs, name)
+        _import_cache[name] = obj
+        return obj
     
     if name == "AckermannGCSPlanner":
         from .ackermann_gcs_planner import AckermannGCSPlanner
@@ -92,6 +103,21 @@ def __getattr__(name: str):
     ):
         from . import directional_curvature_parameters
         obj = getattr(directional_curvature_parameters, name)
+        _import_cache[name] = obj
+        return obj
+
+    if name in (
+        "GearAnnotatedPath",
+        "GearSegment",
+        "annotate_reference_path",
+        "gear_at_s",
+        "gear_summary",
+        "infer_gears_from_path",
+        "normalize_gear",
+        "strip_gears",
+    ):
+        from . import gear_annotations
+        obj = getattr(gear_annotations, name)
         _import_cache[name] = obj
         return obj
     
@@ -123,6 +149,7 @@ __all__ = [
     "CurvatureDerivatives",
     # 核心类
     "AckermannBezierGCS",
+    "GearLayeredAckermannBezierGCS",
     "AckermannGCSPlanner",
     "TrajectoryEvaluator",
     "DirectionalCurvatureParameterBuilder",
@@ -132,6 +159,14 @@ __all__ = [
     "compute_support_width",
     "directional_curvature_linear_constraints",
     "preprocess_reference_path",
+    "GearAnnotatedPath",
+    "GearSegment",
+    "annotate_reference_path",
+    "gear_at_s",
+    "gear_summary",
+    "infer_gears_from_path",
+    "normalize_gear",
+    "strip_gears",
     "HBarPrimeIterationResult",
     "iterate_h_bar_prime",
     "FlatOutputMapper",

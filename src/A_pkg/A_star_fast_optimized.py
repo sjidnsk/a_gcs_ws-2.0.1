@@ -40,6 +40,8 @@ class FastSE2AStarPlanner(BaseSE2Planner):
     def plan(self, start: Tuple[float, float, float],
              goal: Tuple[float, float, float]) -> Optional[List[Tuple[float, float, float]]]:
         """规划路径 - 使用跳跃点搜索优化"""
+        self.last_path_with_gears = None
+
         # 清空缓存
         self._collision_cache.clear()
         self._cache_hits = 0
@@ -115,7 +117,8 @@ class FastSE2AStarPlanner(BaseSE2Planner):
                 jump_node = SearchNode(
                     cost=g_cost + h_cost, pose=jump_pose,
                     g_cost=g_cost, h_cost=h_cost,
-                    parent=current, direction=current.direction
+                    parent=current, direction=current.direction,
+                    motion_gear=current.motion_gear,
                 )
                 heapq.heappush(open_list, jump_node)
                 return True
@@ -144,7 +147,8 @@ class FastSE2AStarPlanner(BaseSE2Planner):
             neighbor_node = SearchNode(
                 cost=g_cost + h_cost, pose=neighbor_pose,
                 g_cost=g_cost, h_cost=h_cost,
-                parent=current, direction=direction
+                parent=current, direction=direction,
+                motion_gear=motion.gear,
             )
             heapq.heappush(open_list, neighbor_node)
     
@@ -207,18 +211,54 @@ class FastSE2AStarPlanner(BaseSE2Planner):
     
     def _reconstruct_path(self, node: SearchNode) -> List[Tuple[float, float, float]]:
         """重建路径"""
-        path = []
+        path_with_gears = []
         current = node
         while current is not None:
-            path.append(current.pose)
+            path_with_gears.append((*current.pose, current.motion_gear))
             current = current.parent
-        path.reverse()
+        path_with_gears.reverse()
+
+        if len(path_with_gears) > 1:
+            first_gear = path_with_gears[1][3]
+            path_with_gears[0] = (*path_with_gears[0][:3], first_gear)
         
         # 路径插值
-        if self.config.path_interpolation and len(path) > 1:
-            path = self._interpolate_path(path)
+        if self.config.path_interpolation and len(path_with_gears) > 1:
+            path_with_gears = self._interpolate_path_with_gears(path_with_gears)
+
+        self.last_path_with_gears = path_with_gears
+        path = [point[:3] for point in path_with_gears]
         
         return path
+
+    def _interpolate_path_with_gears(
+        self,
+        path: List[Tuple[float, float, float, int]],
+    ) -> List[Tuple[float, float, float, int]]:
+        """路径插值，并让插值点继承所在段的gear。"""
+        interpolated = [path[0]]
+
+        for i in range(len(path) - 1):
+            p1, p2 = path[i], path[i + 1]
+            dist = compute_distance(p1[:3], p2[:3])
+            segment_gear = p1[3]
+
+            if dist > self.resolution * Constants.INTERPOLATION_THRESHOLD:
+                num_insertions = min(
+                    int(dist / (self.resolution * 0.5)),
+                    Constants.MAX_INTERPOLATION_POINTS
+                )
+
+                for j in range(1, num_insertions + 1):
+                    t = j / (num_insertions + 1)
+                    interp_x = p1[0] + (p2[0] - p1[0]) * t
+                    interp_y = p1[1] + (p2[1] - p1[1]) * t
+                    interp_theta = normalize_angle(p1[2] + (p2[2] - p1[2]) * t)
+                    interpolated.append((interp_x, interp_y, interp_theta, segment_gear))
+
+            interpolated.append(p2)
+
+        return interpolated
     
     def _interpolate_path(self, path: List[Tuple[float, float, float]]) -> List[Tuple[float, float, float]]:
         """路径插值"""

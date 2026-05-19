@@ -114,7 +114,18 @@ def run_ackermann_gcs_test(scenario: str,
         c_space = SE2ConfigurationSpace(obstacle_map, resolution=0.1)
 
         # 步骤2：A*路径规划（用于生成IRIS区域）
-        path = plan_path(c_space, start, goal, project_config)
+        include_astar_gear = (
+            project_config.ackermann.constraints.reference_gear_source == "astar"
+        )
+        path_result = plan_path(
+            c_space, start, goal, project_config, include_gear=include_astar_gear
+        )
+        if isinstance(path_result, dict):
+            path = path_result["path"]
+            reference_path = path_result.get("gear_path") or path
+        else:
+            path = path_result
+            reference_path = path
         if not path:
             raise ValueError("A*路径规划失败")
 
@@ -172,7 +183,7 @@ def run_ackermann_gcs_test(scenario: str,
             workspace_regions=workspace_regions,
             constraints=constraints,
             cost_weights=project_config.cost_weights(),
-            reference_path=path,
+            reference_path=reference_path,
             verbose=project_config.ackermann.verbose
         )
 
