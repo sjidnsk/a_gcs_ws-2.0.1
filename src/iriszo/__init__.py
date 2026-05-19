@@ -1,147 +1,85 @@
 """
-自定义IrisZo算法模块公共接口
+Public API for the custom IrisZo implementation.
 
-导出所有公共类和函数。
-
-作者: Path Planning Team
+Exports are loaded lazily so importing ``iriszo`` or ``IrisZoConfig`` does not
+pull in Drake, Matplotlib, diagnostics, or the full generation stack.
 """
 
-# 检查Drake可用性
-try:
-    from pydrake.geometry.optimization import HPolyhedron, Hyperellipsoid
-    DRAKE_AVAILABLE = True
-except ImportError:
-    DRAKE_AVAILABLE = False
+from importlib import import_module
+from typing import Any, Dict
 
-# 导入配置
-from .config import (
-    IrisZoConfig,
-    get_high_safety_config,
-    get_fast_processing_config,
-    get_balanced_config
-)
+from .availability import check_drake_availability
 
-# 导入数据结构
-from .core.iriszo_region_data import IrisZoRegion, IrisZoResult
 
-# 导入碰撞检测
-from .core.iriszo_collision import CollisionCheckerAdapter, LRUCache
-
-# 导入核心算法
-from .core.iriszo_algorithm import CustomIrisZoAlgorithm
-
-# 导入采样器
-from .core.iriszo_sampler import HitAndRunSampler
-
-# 导入二分搜索
-from .core.iriszo_bisection import BisectionSearcher
-
-# 导入超平面生成
-from .core.iriszo_hyperplane import SeparatingHyperplaneGenerator
-
-# 导入种子点提取
-from .core.iriszo_seed_extractor import IrisZoSeedExtractor
-
-# 导入主区域生成器
-from .core.iriszo_region import IrisZoRegionGenerator
-
-# 导入覆盖验证
-from .core.iriszo_coverage import CoverageValidator, CoverageResult
-from .core.iriszo_coverage_validator_enhanced import (
-    EnhancedCoverageValidator,
-    EnhancedCoverageResult
-)
-from .core.iriszo_coverage_radius import RadiusCalculator
-from .core.iriszo_obstacle_detector import ObstacleDetector
-from .core.iriszo_coverage_checker import CoverageChecker
-from .core.iriszo_distance_query import (
-    DistanceQueryEngine,
-    DistanceTransformEngine,
-    KDTreeEngine
-)
-
-# 导入区域修剪
-from .core.iriszo_pruning import RegionPruner, PruningResult, RTreeIndex, RTREE_AVAILABLE
-
-# 导入性能报告
-from .core.iriszo_performance import (
-    PerformanceReporter,
-    PerformanceMetrics,
-    PerformanceDataCollector,
-    TimeMetrics,
-    MemoryMetrics,
-    AlgorithmMetrics,
-    CacheMetrics
-)
-
-# 导入可视化
-from .visualization import (
-    visualize_iriszo_result,
-    visualize_iriszo_result_detailed,
-    visualize_region_only
-)
-
-__all__ = [
+_EXPORTS: Dict[str, str] = {
     # 配置
-    'IrisZoConfig',
-    'get_high_safety_config',
-    'get_fast_processing_config',
-    'get_balanced_config',
+    'IrisZoConfig': 'iriszo.config',
+    'get_high_safety_config': 'iriszo.config',
+    'get_fast_processing_config': 'iriszo.config',
+    'get_balanced_config': 'iriszo.config',
 
-    # 数据结构
-    'IrisZoRegion',
-    'IrisZoResult',
+    # 数据结构与几何工具
+    'IrisZoRegion': 'iriszo.geometry',
+    'IrisZoResult': 'iriszo.geometry',
+    'CollisionCheckerAdapter': 'iriszo.geometry',
+    'LRUCache': 'iriszo.geometry',
+    'HitAndRunSampler': 'iriszo.geometry',
+    'BisectionSearcher': 'iriszo.geometry',
+    'SeparatingHyperplaneGenerator': 'iriszo.geometry',
 
-    # 碰撞检测
-    'CollisionCheckerAdapter',
-
-    # 核心算法
-    'CustomIrisZoAlgorithm',
-
-    # 采样器
-    'HitAndRunSampler',
-
-    # 二分搜索
-
-    # 超平面生成
-
-    # 种子点提取
-    'IrisZoSeedExtractor',
-
-    # 主区域生成器
-    'IrisZoRegionGenerator',
+    # 区域生成
+    'CustomIrisZoAlgorithm': 'iriszo.generation',
+    'IrisZoSeedExtractor': 'iriszo.generation',
+    'IrisZoRegionGenerator': 'iriszo.generation',
 
     # 覆盖验证
-    'CoverageValidator',
-    'CoverageResult',
-    'EnhancedCoverageValidator',
-    'EnhancedCoverageResult',
-    'RadiusCalculator',
-    'CoverageChecker',
-    'DistanceQueryEngine',
+    'CoverageValidator': 'iriszo.validation',
+    'CoverageResult': 'iriszo.validation',
+    'EnhancedCoverageValidator': 'iriszo.validation',
+    'EnhancedCoverageResult': 'iriszo.validation',
+    'RadiusCalculator': 'iriszo.validation',
+    'ObstacleDetector': 'iriszo.validation',
+    'CoverageChecker': 'iriszo.validation',
+    'DistanceQueryEngine': 'iriszo.validation',
+    'DistanceTransformEngine': 'iriszo.validation',
+    'KDTreeEngine': 'iriszo.validation',
 
-    # 区域修剪
-    'RegionPruner',
-    'PruningResult',
-    'RTreeIndex',
-    'RTREE_AVAILABLE',
-
-    # 性能报告
-    'PerformanceReporter',
-    'PerformanceMetrics',
-    'PerformanceDataCollector',
-    'TimeMetrics',
-    'MemoryMetrics',
-    'AlgorithmMetrics',
-    'CacheMetrics',
+    # 诊断
+    'RegionPruner': 'iriszo.diagnostics',
+    'PruningResult': 'iriszo.diagnostics',
+    'RTreeIndex': 'iriszo.diagnostics',
+    'RTREE_AVAILABLE': 'iriszo.diagnostics',
+    'PerformanceReporter': 'iriszo.diagnostics',
+    'PerformanceMetrics': 'iriszo.diagnostics',
+    'PerformanceDataCollector': 'iriszo.diagnostics',
+    'TimeMetrics': 'iriszo.diagnostics',
+    'MemoryMetrics': 'iriszo.diagnostics',
+    'AlgorithmMetrics': 'iriszo.diagnostics',
+    'CacheMetrics': 'iriszo.diagnostics',
 
     # 可视化
-    'visualize_iriszo_result',
-    'visualize_iriszo_result_detailed',
-    'visualize_region_only',
+    'visualize_iriszo_result': 'iriszo.visualization',
+    'visualize_iriszo_result_detailed': 'iriszo.visualization',
+    'visualize_region_only': 'iriszo.visualization',
+}
 
-    # Drake可用性
-    'DRAKE_AVAILABLE'
-]
+__all__ = [*_EXPORTS, 'DRAKE_AVAILABLE', 'check_drake_availability']
 
 __version__ = '2.0.0'
+
+
+def __getattr__(name: str) -> Any:
+    if name == 'DRAKE_AVAILABLE':
+        return check_drake_availability()
+
+    module_name = _EXPORTS.get(name)
+    if module_name is None:
+        raise AttributeError(f"module 'iriszo' has no attribute {name!r}")
+
+    value = getattr(import_module(module_name), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list:
+    return sorted(set(globals()) | set(__all__))

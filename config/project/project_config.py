@@ -443,8 +443,9 @@ class ProjectConfig:
         from config.planner import PlannerConfig
 
         scenario = self.selected_scenario(scenario_name)
-        return PlannerConfig(
-            corridor_width=self.corridor.width_for(scenario),
+        corridor_width = self.corridor.width_for(scenario)
+        planner_config = PlannerConfig(
+            corridor_width=corridor_width,
             smooth_path=self.corridor.smooth_path,
             smooth_window=self.corridor.smooth_window,
             boundary_margin=self.corridor.boundary_margin,
@@ -497,6 +498,11 @@ class ProjectConfig:
             ),
             output_dir=self.visualization.output_dir,
         )
+        # PlannerConfig expands GCS strategy presets in __post_init__, and those
+        # presets include a generic corridor width. Project YAML keeps corridor
+        # width scenario-specific unless corridor.width explicitly overrides it.
+        planner_config.corridor_width = corridor_width
+        return planner_config
 
     def astar_planner_config(self):
         from A_pkg.A_star_fast_optimized import PlannerConfig as AStarPlannerConfig

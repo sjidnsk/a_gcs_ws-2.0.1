@@ -13,14 +13,13 @@ import warnings
 try:
     import matplotlib.pyplot as plt
     from matplotlib.patches import Polygon as MplPolygon
-    from matplotlib.collections import PatchCollection
     MATPLOTLIB_AVAILABLE = True
 except ImportError:
     MATPLOTLIB_AVAILABLE = False
     plt = None
     MplPolygon = None
 
-from ..core.iriszo_region_data import IrisZoResult
+from ..geometry.region_data import IrisZoResult
 
 
 def visualize_iriszo_result(

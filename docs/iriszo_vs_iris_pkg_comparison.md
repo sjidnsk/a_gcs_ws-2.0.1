@@ -37,36 +37,46 @@
 ### IrisZo 目录结构
 ```
 src/iriszo/
-├── __init__.py                    # 模块公共接口
-├── README.md                      # 模块说明文档
-├── EXAMPLES.md                    # 使用示例文档
-├── COMPLETENESS_CHECK.md          # 完整性检查报告
+├── __init__.py                    # 懒加载公共接口
 │
 ├── config/                        # 配置模块
 │   ├── __init__.py
 │   └── iriszo_config.py          # 配置参数定义
 │
-├── core/                          # 核心算法模块
+├── generation/                    # 区域生成流程
 │   ├── __init__.py
-│   ├── iriszo_algorithm.py       # 自定义IrisZo算法核心
-│   ├── iriszo_sampler.py         # Hit-and-Run采样器
-│   ├── iriszo_bisection.py       # 二分搜索边界定位
-│   ├── iriszo_hyperplane.py      # 分离超平面生成
-│   ├── iriszo_collision.py       # 碰撞检测适配器
-│   ├── iriszo_seed_extractor.py  # 种子点提取器
-│   ├── iriszo_region_data.py     # 数据结构定义
-│   └── iriszo_region.py          # 区域生成主模块
+│   ├── algorithm.py              # 自定义IrisZo算法核心
+│   ├── region.py                 # 区域生成主模块
+│   └── seed_extractor.py         # 种子点提取器
+│
+├── geometry/                      # 几何与低层算法
+│   ├── __init__.py
+│   ├── bisection.py              # 二分搜索边界定位
+│   ├── collision.py              # 碰撞检测适配器
+│   ├── hyperplane.py             # 分离超平面生成
+│   ├── lru_cache.py              # IrisZo本地LRU缓存
+│   ├── region_data.py            # 数据结构定义
+│   ├── sampler.py                # Hit-and-Run采样器
+│   └── sampler_jit.py            # Numba JIT采样加速
+│
+├── validation/                    # 覆盖验证与距离查询
+│   ├── coverage.py
+│   ├── coverage_checker.py
+│   ├── coverage_radius.py
+│   ├── coverage_validator_enhanced.py
+│   ├── distance_query.py
+│   └── obstacle_detector.py
+│
+├── diagnostics/                   # 性能报告与区域修剪
+│   ├── performance.py
+│   └── pruning.py
+│
+├── core/                          # 兼容聚合入口
+│   └── __init__.py
 │
 ├── visualization/                 # 可视化模块
 │   ├── __init__.py
 │   └── visualize.py              # 可视化实现
-│
-└── tests/                         # 测试模块
-    ├── __init__.py
-    ├── test_basic.py             # 基本功能测试
-    ├── test_enhanced.py          # 增强功能测试
-    ├── test_integration.py       # 集成测试
-    └── test_visualization.py     # 可视化测试
 ```
 
 ### IrisPkg 目录结构
@@ -134,12 +144,12 @@ src/iris_pkg/
 
 | 功能 | IrisZo文件 | 行数 | IrisPkg文件 | 行数 |
 |------|-----------|------|------------|------|
-| **主生成器** | iriszo_region.py | 337 | iris_np_region.py | 1,132 |
-| **算法核心** | iriszo_algorithm.py | 317 | iris_np_expansion.py | 806 |
-| **采样/优化** | iriszo_sampler.py | 343 | iris_np_voronoi_optimizer.py | 588 |
-| **种子提取** | iriszo_seed_extractor.py | 203 | iris_np_seed_extractor.py | 520 |
-| **碰撞检测** | iriszo_collision.py | 379 | iris_np_collision.py | 233 |
-| **数据结构** | iriszo_region_data.py | 316 | iris_np_region_data.py | 170 |
+| **主生成器** | generation/region.py | 337 | iris_np_region.py | 1,132 |
+| **算法核心** | generation/algorithm.py | 317 | iris_np_expansion.py | 806 |
+| **采样/优化** | geometry/sampler.py | 343 | iris_np_voronoi_optimizer.py | 588 |
+| **种子提取** | generation/seed_extractor.py | 203 | iris_np_seed_extractor.py | 520 |
+| **碰撞检测** | geometry/collision.py | 379 | iris_np_collision.py | 233 |
+| **数据结构** | geometry/region_data.py | 316 | iris_np_region_data.py | 170 |
 
 **分析**:
 - IrisPkg代码量更大，功能更丰富
@@ -351,6 +361,7 @@ CustomIrisZoAlgorithm
 HitAndRunSampler
 BisectionSearcher
 SeparatingHyperplaneGenerator
+check_drake_availability()
 
 # 主入口
 IrisZoRegionGenerator
@@ -408,11 +419,9 @@ visualize_iris_np_result()
 #### IrisZo 使用示例
 
 ```python
-from iriszo import (
-    IrisZoRegionGenerator,
-    get_high_safety_config,
-    visualize_iriszo_result
-)
+from iriszo.config import get_high_safety_config
+from iriszo.generation import IrisZoRegionGenerator
+from iriszo.visualization import visualize_iriszo_result
 
 # 创建配置
 config = get_high_safety_config()
@@ -480,26 +489,19 @@ visualize_iris_np_result(
 ### IrisZo 测试结构
 
 ```
-tests/
-├── test_basic.py          # 基本功能测试
-│   ├── test_config()
-│   ├── test_collision_checker()
-│   ├── test_drake_availability()
-│   └── test_algorithm_components()
-│
-├── test_enhanced.py       # 增强功能测试
-│   ├── test_seed_extractor()
-│   ├── test_region_generation()
-│   └── test_two_batch_expansion()
-│
-├── test_integration.py    # 集成测试
-│   ├── test_end_to_end()
-│   └── test_with_real_obstacle_map()
-│
-└── test_visualization.py  # 可视化测试
-    ├── test_basic_visualization()
-    └── test_detailed_visualization()
+tests/unit/
+├── test_directional_curvature_*.py
+└── test_project_config.py
+
+scripts/
+├── verify_environment.py
+├── visualize_3d_trajectory.py
+└── hybrid_astar_gcs_planner.py
 ```
+
+当前仓库没有独立的 IrisZo 包内测试目录。IrisZo相关验证应优先使用
+`tests/unit/` 中不依赖 Drake 的轻量测试，以及 Ubuntu `iris-py3.12`
+环境下的端到端脚本。
 
 ### IrisPkg 测试情况
 

@@ -17,6 +17,7 @@ A*与GCS分层轨迹规划器
 - 详细说明见：config/iris/iris_np_config.py
 """
 
+import os
 import warnings
 import numpy as np
 from typing import List, Tuple, Optional
@@ -46,12 +47,17 @@ except ImportError:
     IRIS_MODULES['np'] = {'available': False}
 
 try:
-    from iriszo import IrisZoRegionGenerator, IrisZoConfig
+    from iriszo.availability import (
+        check_drake_availability as check_iriszo_availability,
+    )
+    from iriszo.config import IrisZoConfig
+    from iriszo.generation import IrisZoRegionGenerator
+
     IRIS_MODULES['zo'] = {
         'available': True,
         'Generator': IrisZoRegionGenerator,
         'Config': IrisZoConfig,
-        'check': lambda: True  # iriszo不依赖drake
+        'check': check_iriszo_availability
     }
 except ImportError:
     IRIS_MODULES['zo'] = {'available': False}
@@ -124,7 +130,7 @@ class HybridAStarGCSPlanner:
 
     def _create_visualizer(self):
         """Create the trajectory visualizer only when visualization is enabled."""
-        from visualization.trajectory.trajectory_visualizer import TrajectoryVisualizer
+        from visualization.planner import TrajectoryVisualizer
 
         return TrajectoryVisualizer(self.c_space, self.config)
     

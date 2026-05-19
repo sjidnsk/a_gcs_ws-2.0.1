@@ -1,0 +1,361 @@
+"""
+自定义IrisZo算法碰撞检测适配模块
+
+实现碰撞检测器适配器,将项目的障碍物地图适配到自定义IrisZo算法所需的接口。
+
+作者: Path Planning Team
+"""
+
+import numpy as np
+from typing import List, Tuple, Optional, Dict, Any
+from .lru_cache import LRUCache
+
+try:
+    from scipy.ndimage import binary_dilation
+    _HAS_SCIPY = True
+except ImportError:
+    _HAS_SCIPY = False
+
+
+class CollisionCheckerAdapter:
+    """
+    碰撞检测器适配器
+
+    将项目的障碍物地图适配到自定义IrisZo算法所需的碰撞检测接口。
+    支持LRU缓存优化和批量检测。
+
+    Attributes:
+        obstacle_map: 障碍物地图,0=自由空间,1=障碍物
+        resolution: 地图分辨率(米/像素)
+        origin: 地图原点坐标(x, y)
+        height: 地图高度(像素)
+        width: 地图宽度(像素)
+        enable_cache: 是否启用缓存
+        _cache: LRU缓存实例
+
+    Example:
+        >>> import numpy as np
+        >>>
+        >>> # 创建障碍物地图
+        >>> obstacle_map = np.zeros((100, 100), dtype=np.uint8)
+        >>> obstacle_map[40:60, 40:60] = 1  # 中心障碍物
+        >>>
+        >>> # 创建碰撞检测器
+        >>> checker = CollisionCheckerAdapter(
+        ...     obstacle_map=obstacle_map,
+        ...     resolution=0.05,
+        ...     origin=(0.0, 0.0)
+        ... )
+        >>>
+        >>> # 检查配置点
+        >>> q = np.array([2.5, 2.5])
+        >>> is_free = checker.check_config_collision_free(q)
+    """
+
+    def __init__(
+        self,
+        obstacle_map: np.ndarray,
+        resolution: float,
+        origin: Tuple[float, float] = (0.0, 0.0),
+        enable_cache: bool = True,
+        cache_size: int = 10000,
+        safety_margin: float = 0.0
+    ):
+        """
+        初始化碰撞检测器适配器
+
+        Args:
+            obstacle_map: 障碍物地图,0=自由空间,1=障碍物
+            resolution: 地图分辨率(米/像素)
+            origin: 地图原点坐标(x, y)
+            enable_cache: 是否启用缓存
+            cache_size: 缓存大小
+            safety_margin: 安全边界(米),在障碍物周围扩展的安全区域
+        """
+        self.obstacle_map = obstacle_map
+        self.resolution = resolution
+        self.origin = origin
+        self.height, self.width = obstacle_map.shape
+        self.enable_cache = enable_cache
+        self.safety_margin = safety_margin
+
+        # 创建LRU缓存
+        self._cache = LRUCache(cache_size) if enable_cache else None
+
+        # 计算安全边界的栅格数
+        self.safety_margin_grid = int(np.ceil(safety_margin / resolution))
+
+        # 预计算膨胀地图（safety_margin > 0时）
+        if self.safety_margin_grid > 0 and _HAS_SCIPY:
+            struct = np.ones(
+                (2 * self.safety_margin_grid + 1,
+                 2 * self.safety_margin_grid + 1),
+                dtype=bool
+            )
+            self._dilated_map = binary_dilation(
+                obstacle_map > 0, structure=struct
+            ).astype(np.uint8)
+            self._query_map = self._dilated_map
+        else:
+            self._query_map = obstacle_map
+
+    def _world_to_grid(self, x: float, y: float) -> Tuple[int, int]:
+        """
+        将世界坐标转换为栅格坐标
+
+        Args:
+            x: 世界坐标x
+            y: 世界坐标y
+
+        Returns:
+            栅格坐标(gx, gy)
+        """
+        gx = int((x - self.origin[0]) / self.resolution)
+        gy = int((y - self.origin[1]) / self.resolution)
+        return (gx, gy)
+
+    def _check_grid_collision(self, gx: int, gy: int) -> bool:
+        """
+        检查栅格坐标是否在障碍物内
+
+        Args:
+            gx: 栅格x坐标
+            gy: 栅格y坐标
+
+        Returns:
+            True如果无碰撞,False如果有碰撞
+        """
+        # 检查边界
+        if not (0 <= gx < self.width and 0 <= gy < self.height):
+            return False  # 超出边界视为碰撞
+
+        # 检查障碍物
+        if self.safety_margin_grid > 0:
+            # 使用安全边界:检查周围区域
+            for dx in range(-self.safety_margin_grid, self.safety_margin_grid + 1):
+                for dy in range(-self.safety_margin_grid, self.safety_margin_grid + 1):
+                    check_gx = gx + dx
+                    check_gy = gy + dy
+                    if 0 <= check_gx < self.width and 0 <= check_gy < self.height:
+                        if self.obstacle_map[check_gy, check_gx] == 1:
+                            return False
+            return True
+        else:
+            # 不使用安全边界:直接检查
+            return (self.obstacle_map[gy, gx] == 0)
+
+    def check_config_collision_free(
+        self,
+        q: np.ndarray,
+        context_number: Optional[int] = None
+    ) -> bool:
+        """
+        检查配置点是否无碰撞
+
+        Args:
+            q: 配置点坐标,shape=(dim,),通常为[x, y]或[x, y, theta]
+            context_number: 上下文编号(并行时使用),当前未使用
+
+        Returns:
+            True如果无碰撞,False如果有碰撞
+
+        Example:
+            >>> q = np.array([2.5, 2.5])
+            >>> is_free = checker.check_config_collision_free(q)
+        """
+        # 提取x, y坐标
+        x, y = q[0], q[1]
+
+        # 转换为栅格坐标
+        gx, gy = self._world_to_grid(x, y)
+
+        # 检查缓存
+        if self.enable_cache and self._cache is not None:
+            cached = self._cache.get((gx, gy))
+            if cached is not None:
+                return cached
+
+        # 执行碰撞检测：始终使用_query_map直接查表
+        # _query_map已包含safety_margin膨胀（通过scipy binary_dilation预计算）
+        if not (0 <= gx < self.width and 0 <= gy < self.height):
+            result = False  # 超出边界视为碰撞
+        else:
+            result = (self._query_map[gy, gx] == 0)
+
+        # 更新缓存
+        if self.enable_cache and self._cache is not None:
+            self._cache.put((gx, gy), result)
+
+        return result
+
+    def check_edge_collision_free(
+        self,
+        q1: np.ndarray,
+        q2: np.ndarray,
+        context_number: Optional[int] = None
+    ) -> bool:
+        """
+        检查连接两个配置点的边是否无碰撞
+
+        沿边采样多个点进行检查。
+
+        Args:
+            q1: 起点配置,shape=(dim,)
+            q2: 终点配置,shape=(dim,)
+            context_number: 上下文编号,当前未使用
+
+        Returns:
+            True如果整条边无碰撞,False否则
+
+        Example:
+            >>> q1 = np.array([0.0, 0.0])
+            >>> q2 = np.array([5.0, 5.0])
+            >>> is_free = checker.check_edge_collision_free(q1, q2)
+        """
+        # 计算边的长度
+        distance = np.linalg.norm(q2[:2] - q1[:2])
+
+        # 根据分辨率确定采样步数
+        # 确保采样间隔不超过分辨率
+        num_samples = max(int(distance / self.resolution) + 1, 2)
+
+        # 沿边采样检查
+        for i in range(num_samples + 1):
+            t = i / num_samples
+            q = q1 + t * (q2 - q1)
+            if not self.check_config_collision_free(q):
+                return False
+
+        return True
+
+    def check_configs_collision_free(
+        self,
+        configs: List[np.ndarray],
+        parallelize: bool = True
+    ) -> List[bool]:
+        """
+        批量检查多个配置点是否无碰撞（numpy向量化）
+
+        Args:
+            configs: 配置点列表
+            parallelize: 是否并行处理(保留接口兼容)
+
+        Returns:
+            布尔结果列表
+
+        Example:
+            >>> configs = [np.array([1.0, 1.0]), np.array([2.0, 2.0])]
+            >>> results = checker.check_configs_collision_free(configs)
+        """
+        n = len(configs)
+        if n == 0:
+            return []
+
+        # 转为2D数组 (N, dim)
+        points = np.asarray(configs)
+        if points.ndim == 1:
+            points = points.reshape(1, -1)
+
+        # 向量化坐标转换
+        gx = ((points[:, 0] - self.origin[0]) / self.resolution).astype(np.int32)
+        gy = ((points[:, 1] - self.origin[1]) / self.resolution).astype(np.int32)
+
+        # 结果数组：True=无碰撞
+        results = np.zeros(n, dtype=np.bool_)
+
+        # 向量化边界检查
+        in_bounds = (0 <= gx) & (gx < self.width) & (0 <= gy) & (gy < self.height)
+        # 超出边界视为碰撞（results已初始化为False）
+
+        if self.enable_cache and self._cache is not None:
+            # 缓存路径：先查缓存，未命中点批量检测
+            uncached_indices = []
+            uncached_gx = []
+            uncached_gy = []
+
+            for i in range(n):
+                if not in_bounds[i]:
+                    continue
+                cached = self._cache.get((int(gx[i]), int(gy[i])))
+                if cached is not None:
+                    results[i] = cached
+                else:
+                    uncached_indices.append(i)
+                    uncached_gx.append(int(gx[i]))
+                    uncached_gy.append(int(gy[i]))
+
+            # 批量检测未命中点
+            if uncached_indices:
+                uc_gx = np.array(uncached_gx, dtype=np.int32)
+                uc_gy = np.array(uncached_gy, dtype=np.int32)
+                uc_results = (self._query_map[uc_gy, uc_gx] == 0)
+
+                for j, idx in enumerate(uncached_indices):
+                    results[idx] = uc_results[j]
+                    self._cache.put((uncached_gx[j], uncached_gy[j]), bool(uc_results[j]))
+        else:
+            # 无缓存路径：纯numpy向量化
+            valid_gx = gx[in_bounds]
+            valid_gy = gy[in_bounds]
+            results[in_bounds] = (self._query_map[valid_gy, valid_gx] == 0)
+
+        return results.tolist()
+
+    def get_cache_stats(self) -> Dict[str, Any]:
+        """
+        获取缓存统计信息
+
+        Returns:
+            缓存统计信息字典
+        """
+        if self.enable_cache and self._cache is not None:
+            return self._cache.get_stats()
+        else:
+            return {
+                'hits': 0,
+                'misses': 0,
+                'hit_rate': 0.0,
+                'size': 0,
+                'capacity': 0
+            }
+
+    def clear_cache(self) -> None:
+        """清空缓存"""
+        if self.enable_cache and self._cache is not None:
+            self._cache.clear()
+
+    def get_map_info(self) -> Dict[str, Any]:
+        """
+        获取地图信息
+
+        Returns:
+            地图信息字典
+        """
+        return {
+            'height': self.height,
+            'width': self.width,
+            'resolution': self.resolution,
+            'origin': self.origin,
+            'safety_margin': self.safety_margin,
+            'obstacle_count': int(np.sum(self.obstacle_map == 1)),
+            'free_count': int(np.sum(self.obstacle_map == 0))
+        }
+
+    def __str__(self) -> str:
+        """
+        返回碰撞检测器的字符串表示
+
+        Returns:
+            格式化的字符串
+        """
+        map_info = self.get_map_info()
+        cache_stats = self.get_cache_stats()
+        return (
+            f"CollisionCheckerAdapter(\n"
+            f"  地图尺寸: {map_info['width']}x{map_info['height']}\n"
+            f"  分辨率: {map_info['resolution']}\n"
+            f"  原点: {map_info['origin']}\n"
+            f"  障碍物数量: {map_info['obstacle_count']}\n"
+            f"  缓存命中率: {cache_stats['hit_rate']:.2%}\n"
+            f")"
+        )

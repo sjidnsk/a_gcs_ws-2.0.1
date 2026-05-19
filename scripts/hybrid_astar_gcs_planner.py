@@ -49,11 +49,11 @@ def print_ackermann_result(result: PlanningResult):
         result: 规划结果
     """
     print(f"\n{'='*60}")
-    print(f"阿克曼GCS规划结果")
+    print("阿克曼GCS规划结果")
     print(f"{'='*60}")
 
     if result.success:
-        print(f"✓ 规划成功")
+        print("✓ 规划成功")
         print(f"  求解时间: {result.solve_time:.2f}s")
         print(f"  SCP迭代次数: {result.num_iterations}")
         print(f"  收敛原因: {result.convergence_reason}")
@@ -78,7 +78,7 @@ def print_ackermann_result(result: PlanningResult):
                 w = report.workspace_violation
                 print(f"  工作空间约束: {'✓ 满足' if not w.is_violated else f'✗ 违反 (max: {w.max_violation:.6f})'}")
     else:
-        print(f"✗ 规划失败")
+        print("✗ 规划失败")
         print(f"  求解时间: {result.solve_time:.2f}s")
         print(f"  错误信息: {result.error_message}")
 
@@ -183,7 +183,7 @@ def run_ackermann_gcs_test(scenario: str,
         if planning_result.success:
             try:
                 # 使用新的模块化可视化系统
-                from visualization.ackermann import visualize_ackermann_gcs_enhanced
+                from visualization.ackermann.visualizer import visualize_ackermann_gcs_enhanced
                 
                 # 创建配置
                 viz_config = project_config.visualization_config()

@@ -25,7 +25,6 @@ if src_dir not in sys.path:
 
 import numpy as np
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
 from typing import Optional
 
 from path_planner.scenario_utils import (
@@ -210,7 +209,7 @@ def visualize_3d_trajectory_interactive(
     if show_control_points:
         print("步骤5b: 提取控制点...")
         try:
-            from visualization.ackermann import extract_control_points
+            from visualization.ackermann.control_points import extract_control_points
 
             control_point_data = extract_control_points(planning_result.trajectory)
             print(f"✓ 提取到 {control_point_data.num_points} 个控制点")
@@ -322,7 +321,7 @@ def visualize_3d_trajectory_interactive(
         # 自动保存2D图
         if auto_save:
             # 使用输出管理器生成路径（自动生成时间戳run_id）
-            from visualization import VisualizationOutputManager
+            from visualization.output import VisualizationOutputManager
 
             output_manager = VisualizationOutputManager.get_instance()
             save_path_2d = output_manager.generate_output_path(
@@ -436,7 +435,7 @@ def visualize_3d_trajectory_interactive(
     # 自动保存逻辑
     if auto_save and save_path is None:
         # 使用输出管理器生成路径（自动生成时间戳run_id）
-        from visualization import VisualizationOutputManager
+        from visualization.output import VisualizationOutputManager
 
         output_manager = VisualizationOutputManager.get_instance()
         save_path = output_manager.generate_output_path(

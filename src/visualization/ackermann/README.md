@@ -39,23 +39,31 @@
 
 ```
 visualization/
-├── __init__.py                      # 模块入口
-├── config.py                        # 可视化配置
-├── trajectory_sampler.py            # 轨迹采样器
-├── region_renderer.py               # IRIS区域渲染器
-├── path_comparator.py               # 路径对比器
-├── plot_2d_trajectory.py            # 2D轨迹绘制
-├── plot_3d_trajectory.py            # 3D轨迹绘制
-├── plot_profiles.py                 # 曲线图绘制
-└── ackermann_visualizer_enhanced.py # 主可视化器
+├── ackermann/
+│   ├── __init__.py                      # Ackermann可视化入口
+│   ├── visualizer.py                    # 主可视化器
+│   ├── sampling.py                      # 轨迹采样器
+│   ├── control_points.py                # 控制点提取
+│   └── renderers/
+│       ├── trajectory_2d.py             # 2D轨迹绘制
+│       ├── trajectory_3d.py             # 3D轨迹绘制
+│       ├── profiles.py                  # 曲线图绘制
+│       ├── regions.py                   # IRIS区域渲染器
+│       └── paths.py                     # 路径对比器
+├── output/                              # 输出路径和文件管理
+├── planner/                             # 规划流程可视化
+├── common/                              # 通用基类
+└── ../config/visualization/             # 可视化配置
 ```
+
+旧模块路径（如 `plot_2d_trajectory.py`、`trajectory_sampler.py`）已移除；新代码应使用上面的新路径。
 
 ## 快速开始
 
 ### 基本使用
 
 ```python
-from ackermann_gcs_pkg.visualization import visualize_ackermann_gcs_enhanced
+from visualization.ackermann.visualizer import visualize_ackermann_gcs_enhanced
 
 # 执行可视化
 visualize_ackermann_gcs_enhanced(
@@ -74,10 +82,8 @@ visualize_ackermann_gcs_enhanced(
 ### 自定义配置
 
 ```python
-from ackermann_gcs_pkg.visualization import (
-    visualize_ackermann_gcs_enhanced,
-    VisualizationConfig
-)
+from config.visualization import VisualizationConfig
+from visualization.ackermann.visualizer import visualize_ackermann_gcs_enhanced
 
 # 创建配置
 config = VisualizationConfig(
@@ -107,10 +113,8 @@ visualize_ackermann_gcs_enhanced(
 ### 使用主可视化器类
 
 ```python
-from ackermann_gcs_pkg.visualization import (
-    AckermannGCSVisualizer,
-    VisualizationConfig
-)
+from config.visualization import VisualizationConfig
+from visualization.ackermann.visualizer import AckermannGCSVisualizer
 
 # 创建可视化器
 config = VisualizationConfig(num_samples=200)
@@ -149,8 +153,8 @@ visualizer.visualize_3d_only(
 ### 独立的3D可视化
 
 ```python
-from ackermann_gcs_pkg.visualization import visualize_3d_trajectory
-from ackermann_gcs_pkg.visualization import TrajectorySampler
+from visualization.ackermann.renderers.trajectory_3d import visualize_3d_trajectory
+from visualization.ackermann.sampling import TrajectorySampler
 
 # 采样轨迹
 sampler = TrajectorySampler(num_samples=200)
@@ -227,7 +231,8 @@ visualize_3d_trajectory(
 ### 速度热力图
 
 ```python
-from ackermann_gcs_pkg.visualization import Plot2DTrajectory, VisualizationConfig
+from config.visualization import VisualizationConfig
+from visualization.ackermann.renderers.trajectory_2d import Plot2DTrajectory
 
 config = VisualizationConfig()
 plotter = Plot2DTrajectory(config)
